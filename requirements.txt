@@ -1,0 +1,13 @@
+aiohttp==1.2.0
+async-timeout==1.1.0
+asyncio-redis==0.14.3
+blosc==1.4.4
+cbor==1.0.0
+cffi==1.9.1
+numpy==1.12.0
+pycparser==2.17
+pyrtlsdr==0.2.4
+requests==2.12.5
+six==1.10.0
+wcwidth==0.1.7
+yarl==0.8.1
