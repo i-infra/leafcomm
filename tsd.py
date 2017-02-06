@@ -25,7 +25,7 @@ class TimeSeriesDatastore(object):
 
     def add_error(self, timestamp, raw):
         inserter = "INSERT INTO errors VALUES(?, ?)"
-        self.cursor.executemany(inserter, [timestamp, raw])
+        self.cursor.executemany(inserter, [(timestamp, raw)])
         return self.conn.commit()
 
     def add_measurement(self, timestamp, sensor_uid, units, value):
