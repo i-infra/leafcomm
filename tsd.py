@@ -13,15 +13,23 @@ class TimeSeriesDatastore(object):
         init_errors = 'CREATE TABLE IF NOT EXISTS errors (Timestamp REAL, Raw Blob)'
         self.conn.execute(init_readings)
         self.conn.execute(init_errors)
+        create_index = 'CREATE INDEX IF NOT EXISTS time ON readings (Timestamp ASC)'
+        self.conn.execute(create_index)
         self.conn.commit()
         self.cursor = self.conn.cursor()
 
-    def get_window(self, start=0, stop=-1):
+    def get_measurements(self, start=0, stop=-1):
         if stop == -1:
             stop = time.time()
         selector = 'SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s' % (
             str(start), str(stop))
-        return self.cursor.execute(selector)
+        samples = self.cursor.execute(selector)
+        labels = 'timestamp sensor_uid units value'.split()
+        samples = [dict(zip(labels, sample)) for sample in samples]
+        for sample in samples:
+           sample['units'] = unit_list[sample['units']]
+        return samples
+
 
     def add_error(self, timestamp, raw):
         inserter = "INSERT INTO errors VALUES(?, ?)"
@@ -48,6 +56,6 @@ class TimeSeriesDatastore(object):
 
 if __name__ in ["__main__", "__console__"]:
     tsd = TimeSeriesDatastore()
-    tsd.add_measurement(time.time(), 0, 'degC', 37.0)
-    for v in tsd.get_window():
+    for v in tsd.get_measurements(time.time()-1000):
         print(v)
+    #tsd.add_measurement(time.time(), 0, 'degC', 37.0)

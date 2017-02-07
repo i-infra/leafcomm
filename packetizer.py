@@ -9,17 +9,15 @@ import itertools
 printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 
-import tsd_client
-
 import beepshrink
 
 import asyncio
 import phase1
 
 # TODO: this shouldn't be needed here if redis bindings can be wrangled
+import tsd
 import cbor
 
-import tsd_client
 
 ilen = lambda it: sum(1 for _ in it)
 rle = lambda xs: ((ilen(gp), x) for x, gp in itertools.groupby(xs))
@@ -102,6 +100,8 @@ def demodulator(pulses):
     return packets
 
 def silver_sensor(packet):
+    # TODO: CRC
+    # TODO: battery OK
     if packet.errors == []:
         bits = [x[0] == 2 for x in rle(packet.packet) if x[1] == 0]
         # some thanks to http://forum.iobroker.net/viewtopic.php?t=3818
@@ -121,7 +121,7 @@ def silver_sensor(packet):
             temp /= 10
             temp -= 32
             temp *= 5/9
-            return {'uid':results[1], 'temperature': temp, 'humidity': humidity, 'channel':results[3], 'metameta': packet.__dict__}
+            return {'uid':results[1], 'temperature': temp, 'humidity': humidity, 'channel':results[3]}#, 'metameta': packet.__dict__}
         elif len(bits) == 36:
             fields = [0] + [4]*9
             fields = [x for x in itertools.accumulate(fields)]
@@ -141,6 +141,7 @@ def silver_sensor(packet):
 
 async def main():
     subscriber = await phase1.get_dequeuer()
+    datastore = tsd.TimeSeriesDatastore()
     while True:
         msg = await subscriber.next_published()
         info = cbor.loads(msg.value)
@@ -155,10 +156,15 @@ async def main():
                 print(printer(packet.packet))
                 res = silver_sensor(packet)
                 if (res is not None) and decoded is False:
-                    tsd_client.logmeasurement(info['time'], res)
+                    uid = (res['channel']+1*1024)+res['uid']
+                    #measurement = timestamp, sensor_uid, units, value)
+                    datastore.add_measurement(info['time'], uid, 'degc', res['temperature'])
+                    datastore.add_measurement(info['time'], uid, 'rh', res['humidity'])
+                    print(res)
                     decoded = True
+                    break
             if decoded == False:
-                tsd_client.logerror(info['time'], msg.value)
+                datastore.add_error(info['time'], msg.value)
         end = time.time()
         print(end-start)
 
