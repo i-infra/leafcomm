@@ -1,8 +1,19 @@
-import requests
 import time
 import tsd
 
+import sys
+
+import cairocffi as cairo
+import fractions
+
+import decimal
+import math
+
+import pycha.line
+import pycha.scatter
+
 sensor_colors = ['#70B336FF', '#7CEAFFFF', '#CFA8FFFF', '#FFABCBFF', '#661479FF']
+
 datastore = tsd.TimeSeriesDatastore()
 def get_datasets(start=0, stop=-1, parameter = 'degc'):
     sensors = {}
@@ -15,25 +26,12 @@ def get_datasets(start=0, stop=-1, parameter = 'degc'):
                 sensors[sample['sensor_uid']] = [value]
             else:
                 sensors[sample['sensor_uid']].append(value)
-
     for sensor in [x for x in sensors.items()]:
         if len(sensor[1]) < 10:
             sensors.pop(sensor[0])
     return sensors
 
 
-import sys
-
-import cairocffi as cairo
-import random
-import fractions
-
-import decimal
-import math
-import copy
-
-import pycha.line
-import pycha.scatter
 
 def plotter(datasets, width, height):
     surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
@@ -94,10 +92,17 @@ def plotter(datasets, width, height):
     chart.render()
     return surface
 
+def plot_temperatures(hours=1, width = 1200, height = 800):
+    output = 'linechart.png'
+    datasets = get_datasets(time.time()-hours*60*60)
+    surface = plotter(datasets.items(), width, height)
+    surface.write_to_png(f"images/timespan-{hours}hrs.png")
+
+
+hour_scales = [1, 2, 4, 12, 24, 7*24]
+
 if __name__ in ['__main__', '__console__']:
-    hour_scales = [2, 4, 12, 24, 7*24]
-    for hours in hour_scales:
-        output = 'linechart.png'
-        datasets = get_datasets(time.time()-hours*60*60)
-        surface = plotter(datasets.items(), 1200, 800)
-        surface.write_to_png(f"{hours}hrs.png")
+    while True:
+        for hours in hour_scales:
+            plot_temperatures(hours)
+        time.sleep(60)
