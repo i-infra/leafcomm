@@ -14,9 +14,7 @@ import beepshrink
 import asyncio
 import phase1
 
-# TODO: this shouldn't be needed here if redis bindings can be wrangled
 import tsd
-import cbor
 
 
 ilen = lambda it: sum(1 for _ in it)
@@ -136,19 +134,23 @@ def silver_sensor(packet):
             temp /= 10
             rh = n[7]*10 + n[8]
             if n[0] == 5:
-                return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}#, 'metameta': packet.__dict__}
+                return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return None
 
 async def main():
-    subscriber = await phase1.get_dequeuer()
+    connection = await phase1.get_connection()
     datastore = tsd.TimeSeriesDatastore()
     while True:
-        msg = await subscriber.next_published()
-        info = cbor.loads(msg.value)
+        timestamp = await connection.brpop(['eof_timestamps'], 360)
+        timestamp = timestamp.value
+        info = await connection.get(timestamp)
         start = time.time()
-        ba = beepshrink.decompress(info['size'], info['dtype'], info['data'])
-        ba = np.absolute(ba) > np.mean(np.absolute(ba))
-        pulses = [(w,v*1) for (w,v) in rle(ba)]
+        if info == {}:
+            pulses = []
+        else:
+            ba = beepshrink.decompress(info['size'], info['dtype'], info['data'])
+            ba = np.absolute(ba) > np.mean(np.absolute(ba))
+            pulses = [(w,v*1) for (w,v) in rle(ba)]
         res = None
         decoded = False
         if len(pulses) > 10:
@@ -158,13 +160,17 @@ async def main():
                 if (res is not None) and decoded is False:
                     uid = (res['channel']+1*1024)+res['uid']
                     #measurement = timestamp, sensor_uid, units, value)
-                    datastore.add_measurement(info['time'], uid, 'degc', res['temperature'])
-                    datastore.add_measurement(info['time'], uid, 'rh', res['humidity'])
+                    datastore.add_measurement(timestamp, uid, 'degc', res['temperature'])
+                    datastore.add_measurement(timestamp, uid, 'rh', res['humidity'])
                     print(res)
                     decoded = True
                     break
-            if decoded == False:
-                datastore.add_error(info['time'], msg.value)
+        if (len(pulses) != 0) and (decoded == False):
+            await connection.expire(timestamp, 3600)
+            await connection.lpush('nontrivial_timestamps', [timestamp])
+        else:
+            await connection.delete([timestamp])
+
         end = time.time()
         print(end-start)
 
