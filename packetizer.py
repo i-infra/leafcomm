@@ -167,7 +167,7 @@ async def main():
                     break
         if (len(pulses) != 0) and (decoded == False):
             await connection.expire(timestamp, 3600)
-            await connection.lpush('nontrivial_timestamps', [timestamp])
+            await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
             await connection.delete([timestamp])
 
