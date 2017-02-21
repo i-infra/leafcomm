@@ -65,7 +65,6 @@ async def process_samples(sdr, connection):
     loud = False
     async for samples in sdr.stream(1024*32, format='bytes'):
         floats = await packed_bytes_to_iq(samples)
-        fftd = np.fft.fft(floats)
         pwr = np.sum(np.absolute(floats))
         if total == 0:
             total = pwr
