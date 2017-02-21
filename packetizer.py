@@ -20,6 +20,8 @@ import tsd
 ilen = lambda it: sum(1 for _ in it)
 rle = lambda xs: ((ilen(gp), x) for x, gp in itertools.groupby(xs))
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
+# takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
+rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
 
 class PacketBase(object):
     def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
@@ -70,7 +72,7 @@ def find_pulse_groups(pulses, deciles):
 def demodulator(pulses):
     packets = []
     # drop short (clearly erroneous, spurious) pulses
-    #pulses = [x for x in rle(rld([x for x in pulses if x[0] > 2]))]
+    pulses = rerle([x for x in pulses if x[0] > 2])
     deciles = get_decile_durations(pulses)
     if not deciles:
         return packets
@@ -148,7 +150,7 @@ async def main():
         if info == {}:
             pulses = []
         else:
-            ba = beepshrink.decompress(info['size'], info['dtype'], info['data'])
+            ba = beepshrink.decompress(**info)
             ba = np.absolute(ba) > np.mean(np.absolute(ba))
             pulses = [(w,v*1) for (w,v) in rle(ba)]
         res = None
