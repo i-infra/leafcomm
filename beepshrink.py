@@ -14,9 +14,9 @@ cname = 'lz4'
 
 compress = lambda in_: (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=clevel, shuffle=shuffle, cname=cname))
 
-def decompress(size, dtype, compressed):
+def decompress(size, dtype, data):
     out = np.empty(size, dtype)
-    blosc.decompress_ptr(compressed, out.__array_interface__['data'][0])
+    blosc.decompress_ptr(data, out.__array_interface__['data'][0])
     return out
 
 #(size, dtype, compressed) = compress(in_)
