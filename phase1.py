@@ -58,7 +58,7 @@ async def process_samples(sdr, connection):
         return sdr.packed_bytes_to_iq(samples)
 
     total = 0
-    count = 0
+    count = 1
     last = time.time()
     relevant_blocks = []
     block_time = time.time()
@@ -67,14 +67,18 @@ async def process_samples(sdr, connection):
         floats = await packed_bytes_to_iq(samples)
         fftd = np.fft.fft(floats)
         pwr = np.sum(np.absolute(floats))
-        total += pwr
-        count += 1
+        if total == 0:
+            total = pwr
         if pwr > (total / count):
+            total += (pwr - (total/count))/100.
             print(time.time()-last, len(samples)/sdr.rs, pwr, total/count)
             loud = True
             relevant_blocks.append(floats)
         else:
+            total += pwr
+            count += 1
             if loud:
+                relevant_blocks.append(floats)
                 timestamp = time.time()
                 block = np.concatenate(relevant_blocks)
                 size, dtype, compressed = beepshrink.compress(block)
