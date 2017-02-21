@@ -102,6 +102,7 @@ def demodulator(pulses):
 def silver_sensor(packet):
     # TODO: CRC
     # TODO: battery OK
+    # TODO: handle preamble pulse
     if packet.errors == []:
         bits = [x[0] == 2 for x in rle(packet.packet) if x[1] == 0]
         # some thanks to http://forum.iobroker.net/viewtopic.php?t=3818
