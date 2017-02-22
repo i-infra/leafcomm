@@ -1,0 +1,23 @@
+import asyncio
+import beepshrink
+import phase1
+import cbor
+import base64
+
+import sys
+
+# accepts one argument, the ascii base64 representation of the cbor-encoded f64 timestamp
+# this is awkward, but unambiguous and space-efficient. you can at least type it, don't complain.
+
+key = cbor.loads(base64.b64decode(sys.argv[1]))
+
+async def main():
+    conn = await phase1.get_connection()
+    info = await conn.get(key)
+    f = open(str(key)+'.beep', 'wb')
+    f.write(cbor.dumps(info))
+    f.flush()
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
