@@ -1,5 +1,4 @@
 import asyncio
-from rtlsdr import rtlsdraio
 import math
 import time
 import numpy as np
@@ -23,6 +22,7 @@ async def get_connection():
     return redis_connection 
 
 async def main():
+    from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
     print('Configuring SDR...')
