@@ -6,6 +6,8 @@ import json
 import time
 import itertools
 
+import bottleneck as bn
+
 printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 
@@ -14,14 +16,14 @@ import beepshrink
 import asyncio
 import phase1
 
-# TODO: this shouldn't be needed here if redis bindings can be wrangled
 import tsd
-import cbor
 
 
 ilen = lambda it: sum(1 for _ in it)
 rle = lambda xs: ((ilen(gp), x) for x, gp in itertools.groupby(xs))
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
+# takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
+rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
 
 class PacketBase(object):
     def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
@@ -72,7 +74,7 @@ def find_pulse_groups(pulses, deciles):
 def demodulator(pulses):
     packets = []
     # drop short (clearly erroneous, spurious) pulses
-    #pulses = [x for x in rle(rld([x for x in pulses if x[0] > 2]))]
+    pulses = rerle([x for x in pulses if x[0] > 2])
     deciles = get_decile_durations(pulses)
     if not deciles:
         return packets
@@ -102,6 +104,7 @@ def demodulator(pulses):
 def silver_sensor(packet):
     # TODO: CRC
     # TODO: battery OK
+    # TODO: handle preamble pulse
     if packet.errors == []:
         bits = [x[0] == 2 for x in rle(packet.packet) if x[1] == 0]
         # some thanks to http://forum.iobroker.net/viewtopic.php?t=3818
@@ -136,19 +139,25 @@ def silver_sensor(packet):
             temp /= 10
             rh = n[7]*10 + n[8]
             if n[0] == 5:
-                return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}#, 'metameta': packet.__dict__}
+                return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return None
 
 async def main():
-    subscriber = await phase1.get_dequeuer()
+    connection = await phase1.get_connection()
     datastore = tsd.TimeSeriesDatastore()
     while True:
-        msg = await subscriber.next_published()
-        info = cbor.loads(msg.value)
+        timestamp = await connection.brpop(['eof_timestamps'], 360)
+        timestamp = timestamp.value
+        info = await connection.get(timestamp)
         start = time.time()
-        ba = beepshrink.decompress(info['size'], info['dtype'], info['data'])
-        ba = np.absolute(ba) > np.mean(np.absolute(ba))
-        pulses = [(w,v*1) for (w,v) in rle(ba)]
+        if info == {}:
+            pulses = []
+        else:
+            b = beepshrink.decompress(**info)
+            ba = np.absolute(b)
+            bm = bn.move_mean(ba, 16, 1)
+            ba = bm > 0.5*bn.nanmax(bm)
+            pulses = [(w,v*1) for (w,v) in rle(ba)]
         res = None
         decoded = False
         if len(pulses) > 10:
@@ -158,13 +167,17 @@ async def main():
                 if (res is not None) and decoded is False:
                     uid = (res['channel']+1*1024)+res['uid']
                     #measurement = timestamp, sensor_uid, units, value)
-                    datastore.add_measurement(info['time'], uid, 'degc', res['temperature'])
-                    datastore.add_measurement(info['time'], uid, 'rh', res['humidity'])
+                    datastore.add_measurement(timestamp, uid, 'degc', res['temperature'])
+                    datastore.add_measurement(timestamp, uid, 'rh', res['humidity'])
                     print(res)
                     decoded = True
                     break
-            if decoded == False:
-                datastore.add_error(info['time'], msg.value)
+        if (len(pulses) != 0) and (decoded == False):
+            await connection.expire(timestamp, 3600)
+            await connection.sadd('nontrivial_timestamps', [timestamp])
+        else:
+            await connection.delete([timestamp])
+
         end = time.time()
         print(end-start)
 

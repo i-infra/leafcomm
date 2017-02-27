@@ -12,8 +12,9 @@ import math
 import pycha.line
 import pycha.scatter
 
-sensor_colors = ['#70B336FF', '#7CEAFFFF', '#CFA8FFFF', '#FFABCBFF', '#661479FF']
-
+sensor_colors = ['#70B336', '#7CEAFF', '#CFA8FF', '#FFABCB', '#661479']
+opacity = '80'
+sensor_colors = [x+opacity for x in sensor_colors]
 datastore = tsd.TimeSeriesDatastore()
 def get_datasets(start=0, stop=-1, parameter = 'degc'):
     sensors = {}
@@ -33,9 +34,11 @@ def get_datasets(start=0, stop=-1, parameter = 'degc'):
 
 
 
-def plotter(datasets, width, height):
-    surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
-
+def plotter(filename, datasets, width, height):
+    if len(datasets) == 0:
+        print('no datasets for', filename)
+        return None
+    surface = cairo.SVGSurface(filename, width, height)
     longest = max([y[1][-1][0] for y in datasets])
     # starts tick guess at number of hours
     tick_count = longest / 3600
@@ -92,11 +95,10 @@ def plotter(datasets, width, height):
     chart.render()
     return surface
 
-def plot_temperatures(hours=1, width = 1200, height = 800):
-    output = 'linechart.png'
+def plot_temperatures(hours=1, width = 1024, height = 768):
     datasets = get_datasets(time.time()-hours*60*60)
-    surface = plotter(datasets.items(), width, height)
-    surface.write_to_png(f"images/timespan-{hours}hrs.png")
+    filename = "images/timespan-"+str(hours)+"hrs.svg"
+    surface = plotter(filename, datasets.items(), width, height)
 
 
 hour_scales = [1, 2, 4, 12, 24, 7*24]
