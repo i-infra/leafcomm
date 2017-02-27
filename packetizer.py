@@ -6,6 +6,8 @@ import json
 import time
 import itertools
 
+import bottleneck as bn
+
 printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 
@@ -151,8 +153,10 @@ async def main():
         if info == {}:
             pulses = []
         else:
-            ba = beepshrink.decompress(**info)
-            ba = np.absolute(ba) > np.mean(np.absolute(ba))
+            b = beepshrink.decompress(**info)
+            ba = np.absolute(b)
+            bm = bn.move_mean(ba, 16, 1)
+            ba = bm > 0.5*bn.nanmax(bm)
             pulses = [(w,v*1) for (w,v) in rle(ba)]
         res = None
         decoded = False
