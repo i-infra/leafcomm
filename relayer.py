@@ -25,7 +25,8 @@ async def main():
     for info in sorted([x for x in zip(sorted(failed),infos) if x[1] is not None and 'size' in x[1].keys()], key=lambda x: x[1]['size']):
         print(base64.b64encode(cbor.dumps(info[0])), info[1]['size'])
         byte_count += forwarder(info[1])
-        await writer.drain()
+        if writer is not None:
+            await writer.drain()
     print('bytes sent', byte_count)
 
 if __name__ == "__main__":
