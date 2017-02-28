@@ -142,6 +142,14 @@ def silver_sensor(packet):
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return None
 
+def get_pulses_from_analog(info):
+    beep_samples = beepshrink.decompress(**info)
+    beep_absolute = np.absolute(beep_samples)
+    beep_smoothed = bn.move_mean(beep_absolute, 16, 1)
+    beep_binary = beep_smoothed > 0.5*bn.nanmax(beep_smoothed)
+    pulses = [(w,v*1) for (w,v) in rle(beep_binary)]
+    return pulses
+
 async def main():
     connection = await phase1.get_connection()
     datastore = tsd.TimeSeriesDatastore()
@@ -153,11 +161,7 @@ async def main():
         if info == {}:
             pulses = []
         else:
-            b = beepshrink.decompress(**info)
-            ba = np.absolute(b)
-            bm = bn.move_mean(ba, 16, 1)
-            ba = bm > 0.5*bn.nanmax(bm)
-            pulses = [(w,v*1) for (w,v) in rle(ba)]
+            pulses = get_pulses_from_analog(info)
         res = None
         decoded = False
         if len(pulses) > 10:
