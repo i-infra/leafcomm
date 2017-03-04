@@ -6,7 +6,12 @@ import json
 import time
 import itertools
 
-import bottleneck as bn
+try:
+    import bottleneck as bn
+    smoother = lambda xs: bn.move_mean(xs, 16, 1)
+except:
+    logging.warning("not using bottleneck, no moving avg applied")
+    smoother = lambda xs: xs
 
 printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
@@ -18,8 +23,13 @@ import phase1
 
 import tsd
 
+try:
+    import cytoolz as cz
+    ilen = cz.count
+except:
+    logging.warning("not using cytoolz")
+    ilen = lambda it: sum(1 for _ in it)
 
-ilen = lambda it: sum(1 for _ in it)
 rle = lambda xs: ((ilen(gp), x) for x, gp in itertools.groupby(xs))
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
 # takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
@@ -33,6 +43,7 @@ class PacketBase(object):
         self.raw = raw
 
 def get_decile_durations(pulses):
+    # return a dict mapping value to a 2-tuple of widths
     values = set([value for (width, value) in pulses])
     deciles = {}
     if len(pulses) < 10:
@@ -145,7 +156,7 @@ def silver_sensor(packet):
 def get_pulses_from_analog(info):
     beep_samples = beepshrink.decompress(**info)
     beep_absolute = np.absolute(beep_samples)
-    beep_smoothed = bn.move_mean(beep_absolute, 16, 1)
+    beep_smoothed = smoother(beep_absolute)
     beep_binary = beep_smoothed > 0.5*bn.nanmax(beep_smoothed)
     pulses = [(w,v*1) for (w,v) in rle(beep_binary)]
     return pulses
