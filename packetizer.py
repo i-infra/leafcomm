@@ -1,39 +1,35 @@
 from statistics import mode, mean, StatisticsError
 
-import sys
 import numpy as np
-import json
 import time
 import itertools
-
-try:
-    import bottleneck as bn
-    smoother = lambda xs: bn.move_mean(xs, 16, 1)
-except:
-    logging.warning("not using bottleneck, no moving avg applied")
-    smoother = lambda xs: xs
-
-printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
-debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
-
 import beepshrink
-
-import asyncio
-import phase1
-
-import tsd
 
 try:
     import cytoolz as cz
     ilen = cz.count
+    # equivalent, but slower...
+    #rle = lambda xs: ((ilen(gp), gp[0]) for gp in cz.recipes.partitionby(lambda x: x, xs))
 except:
     logging.warning("not using cytoolz")
     ilen = lambda it: sum(1 for _ in it)
+
+try:
+    import bottleneck as bn
+    smoother = lambda xs: bn.move_mean(xs, 16, 1)
+    #functionally equivalent but 60x slower
+    #smoother = lambda xs: np.array([sum(x) for x in cz.itertoolz.sliding_window(16, xs)])
+except:
+    logging.warning("not using bottleneck, no moving avg applied")
+    smoother = lambda xs: xs
 
 rle = lambda xs: ((ilen(gp), x) for x, gp in itertools.groupby(xs))
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
 # takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
 rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
+
+printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
+debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 
 class PacketBase(object):
     def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
@@ -158,10 +154,12 @@ def get_pulses_from_analog(info):
     beep_absolute = np.absolute(beep_samples)
     beep_smoothed = smoother(beep_absolute)
     beep_binary = beep_smoothed > 0.5*bn.nanmax(beep_smoothed)
-    pulses = [(w,v*1) for (w,v) in rle(beep_binary)]
+    pulses = rle(beep_binary)
     return pulses
 
 async def main():
+    import tsd
+    import phase1
     connection = await phase1.get_connection()
     datastore = tsd.TimeSeriesDatastore()
     while True:
@@ -197,5 +195,6 @@ async def main():
         print(end-start)
 
 if __name__ == "__main__":
+    import asyncio
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
