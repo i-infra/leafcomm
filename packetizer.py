@@ -1,22 +1,26 @@
 from statistics import mode, mean, StatisticsError
 
+import numexpr3 as ne3
 import numpy as np
 import time
 import itertools
 import beepshrink
+
+ne3.set_num_threads(2)
 
 try:
     import cytoolz as cz
     ilen = cz.count
     # equivalent, but slower...
     #rle = lambda xs: ((ilen(gp), gp[0]) for gp in cz.recipes.partitionby(lambda x: x, xs))
+    #rerle = lambda xs: ((sum((i[0] for i in gp)), gp[0][1]) for gp in cz.recipes.partitionby(lambda x: x[1], xs))
 except:
     logging.warning("not using cytoolz")
     ilen = lambda it: sum(1 for _ in it)
 
 try:
     import bottleneck as bn
-    smoother = lambda xs: bn.move_mean(xs, 16, 1)
+    smoother = lambda xs: bn.move_mean(xs, 32, 1)
     #functionally equivalent but 60x slower
     #smoother = lambda xs: np.array([sum(x) for x in cz.itertoolz.sliding_window(16, xs)])
 except:
@@ -42,7 +46,7 @@ def get_decile_durations(pulses):
     # return a dict mapping value to a 2-tuple of widths
     values = set([value for (width, value) in pulses])
     deciles = {}
-    if len(pulses) < 10:
+    if ilen(pulses) < 10:
         return None
     for value in sorted(list(values)):
         counts = sorted([width for (width, x) in pulses if x == value])
@@ -81,7 +85,7 @@ def find_pulse_groups(pulses, deciles):
 def demodulator(pulses):
     packets = []
     # drop short (clearly erroneous, spurious) pulses
-    pulses = rerle([x for x in pulses if x[0] > 2])
+    pulses = [x for x in rerle([x for x in pulses if x[0] > 2])]
     deciles = get_decile_durations(pulses)
     if not deciles:
         return packets
@@ -151,9 +155,12 @@ def silver_sensor(packet):
 
 def get_pulses_from_analog(info):
     beep_samples = beepshrink.decompress(**info)
-    beep_absolute = np.absolute(beep_samples)
+    beep_absolute = np.zeros(info['size'], dtype='float32')
+    ne3.evaluate('beep_absolute = abs(beep_samples)')
     beep_smoothed = smoother(beep_absolute)
-    beep_binary = beep_smoothed > 0.5*bn.nanmax(beep_smoothed)
+    threshold = 0.5*bn.nanmax(beep_smoothed)
+    beep_binary = np.zeros(info['size'], dtype=bool)
+    ne3.evaluate('beep_binary = beep_smoothed > threshold')
     pulses = rle(beep_binary)
     return pulses
 
