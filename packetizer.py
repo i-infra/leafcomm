@@ -12,7 +12,7 @@ ne3.set_num_threads(2)
 
 ilen = cz.count
 
-rle = lambda xs: ((ilen(gp), x) for x, gp in itertools.groupby(xs))
+rle = lambda xs: [(ilen(gp), x) for x, gp in itertools.groupby(xs)]
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
 # takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
 rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
@@ -31,7 +31,7 @@ def get_pulses_from_analog(info):
     beep_binary = np.empty(info['size'], dtype=bool)
     ne3.evaluate('beep_binary = beep_smoothed > threshold')
     pulses = rle(beep_binary)
-    return [pulse for pulse in pulses]
+    return pulses
 
 class PacketBase(object):
     def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
