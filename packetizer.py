@@ -142,11 +142,11 @@ def silver_sensor(packet):
 
 def get_pulses_from_analog(info):
     beep_samples = beepshrink.decompress(**info)
-    beep_absolute = np.zeros(info['size'], dtype='float32')
+    beep_absolute = np.empty(info['size'], dtype='float32')
     ne3.evaluate('beep_absolute = abs(beep_samples)')
     beep_smoothed = smoother(beep_absolute)
     threshold = 0.5*bn.nanmax(beep_smoothed)
-    beep_binary = np.zeros(info['size'], dtype=bool)
+    beep_binary = np.empty(info['size'], dtype=bool)
     ne3.evaluate('beep_binary = beep_smoothed > threshold')
     pulses = rle(beep_binary)
     return pulses
