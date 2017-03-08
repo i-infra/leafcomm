@@ -22,6 +22,17 @@ debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 
 smoother = lambda xs: bn.move_mean(xs, 32, 1)
 
+def get_pulses_from_analog(info):
+    beep_samples = beepshrink.decompress(**info)
+    beep_absolute = np.empty(info['size'], dtype='float32')
+    ne3.evaluate('beep_absolute = abs(beep_samples)')
+    beep_smoothed = smoother(beep_absolute)
+    threshold = 0.5*bn.nanmax(beep_smoothed)
+    beep_binary = np.empty(info['size'], dtype=bool)
+    ne3.evaluate('beep_binary = beep_smoothed > threshold')
+    pulses = rle(beep_binary)
+    return [pulse for pulse in pulses]
+
 class PacketBase(object):
     def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
         self.packet = packet
@@ -140,17 +151,6 @@ def silver_sensor(packet):
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return None
 
-def get_pulses_from_analog(info):
-    beep_samples = beepshrink.decompress(**info)
-    beep_absolute = np.empty(info['size'], dtype='float32')
-    ne3.evaluate('beep_absolute = abs(beep_samples)')
-    beep_smoothed = smoother(beep_absolute)
-    threshold = 0.5*bn.nanmax(beep_smoothed)
-    beep_binary = np.empty(info['size'], dtype=bool)
-    ne3.evaluate('beep_binary = beep_smoothed > threshold')
-    pulses = rle(beep_binary)
-    return pulses
-
 async def main():
     import tsd
     import phase1
@@ -161,10 +161,11 @@ async def main():
         timestamp = timestamp.value
         info = await connection.get(timestamp)
         start = time.time()
-        if info == {}:
+        if info in [{}, None]:
             pulses = []
         else:
             pulses = get_pulses_from_analog(info)
+            print('got pulses', time.time()-start)
         res = None
         decoded = False
         if len(pulses) > 10:
