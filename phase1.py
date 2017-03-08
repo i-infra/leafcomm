@@ -56,7 +56,12 @@ stereo_to_complex = lambda a: a[0] + a[1]*1j
 
 async def process_samples(sdr, connection):
     async def packed_bytes_to_iq(samples):
-        return sdr.packed_bytes_to_iq(samples)
+        bytes_np = np.ctypeslib.as_array(samples)
+        iq = np.empty(len(samples)//2, 'complex64')
+        iq.real, iq.imag = bytes_np[::2], bytes_np[1::2]
+        iq /= (255/2)
+        iq -= (1 + 1j)
+        return iq
 
     total = 0
     count = 1
