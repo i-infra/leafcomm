@@ -2,30 +2,15 @@ from statistics import mode, mean, StatisticsError
 
 import numexpr3 as ne3
 import numpy as np
+import bottleneck as bn
+import cytoolz as cz
 import time
 import itertools
 import beepshrink
 
 ne3.set_num_threads(2)
 
-try:
-    import cytoolz as cz
-    ilen = cz.count
-    # equivalent, but slower...
-    #rle = lambda xs: ((ilen(gp), gp[0]) for gp in cz.recipes.partitionby(lambda x: x, xs))
-    #rerle = lambda xs: ((sum((i[0] for i in gp)), gp[0][1]) for gp in cz.recipes.partitionby(lambda x: x[1], xs))
-except:
-    logging.warning("not using cytoolz")
-    ilen = lambda it: sum(1 for _ in it)
-
-try:
-    import bottleneck as bn
-    smoother = lambda xs: bn.move_mean(xs, 32, 1)
-    #functionally equivalent but 60x slower
-    #smoother = lambda xs: np.array([sum(x) for x in cz.itertoolz.sliding_window(16, xs)])
-except:
-    logging.warning("not using bottleneck, no moving avg applied")
-    smoother = lambda xs: xs
+ilen = cz.count
 
 rle = lambda xs: ((ilen(gp), x) for x, gp in itertools.groupby(xs))
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
@@ -34,6 +19,8 @@ rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby
 
 printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
+
+smoother = lambda xs: bn.move_mean(xs, 32, 1)
 
 class PacketBase(object):
     def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
