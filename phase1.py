@@ -29,8 +29,9 @@ async def main():
     # multiple of 2, 5 - should have neon butterflies for at least these
     # lowest "sane" sample rate
     sdr.rs = 256000
-    # center frequency for 433.92 ism
-    sdr.fc = 433.9e6
+    # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
+    # offset center frequency for 433.92 ism
+    sdr.fc = 434e6
     # arbitrary small number, adjust based on antenna and range
     sdr.gain = 3
     #sdr.set_manual_gain_enabled(False)
