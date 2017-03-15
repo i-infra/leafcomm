@@ -4,36 +4,14 @@ import numexpr3 as ne3
 import numpy as np
 import bottleneck as bn
 import cytoolz as cz
-import numba as nb
 import time
 import itertools
 import beepshrink
 
 ne3.set_num_threads(2)
 
-ilen = cz.count
+ilen = cz.count #lambda seq: len(seq) if hasattr(seq, '__len__') else sum(1 for i in seq)
 
-@nb.njit(cache=True, nogil=True) 
-def counts(arr):
-    res = np.zeros((arr.size, 2), dtype=np.int32)
-    i = 0
-    cnts = 0
-    last = arr[1]
-    for item in arr[1:]:
-        if item == last:
-            cnts += 1
-        else:
-            res[i, 0] = cnts
-            res[i, 1] = last
-            last = item
-            cnts = 1
-            i += 1
-    res[i, 0] = cnts
-    res[i, 1] = last
-    i += 1
-    return res[:i]
-
-#rle = lambda xs: counts(xs)
 rle = lambda xs: [(ilen(gp), x) for x, gp in itertools.groupby(xs)]
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
 # takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
@@ -41,9 +19,7 @@ rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby
 
 printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
-
 smoother = lambda xs: bn.move_mean(xs, 32, 1)
-
 
 def get_pulses_from_info(info):
     beep_samples = beepshrink.decompress(**info)
@@ -57,40 +33,7 @@ def get_pulses_from_info(info):
     pulses = rle(beep_binary)
     return pulses
 
-def get_pulses_from_info2(info):
-    beep_samples = beepshrink.decompress(**info)
-    shape = beep_samples.shape
-    absolute = np.zeros(shape, dtype='float32')
-    binary = np.zeros(shape, dtype='uint8')
-    shape = beep_samples.shape[0]
-    @nb.njit(cache=True, nogil=True)
-    def get_binary_from_analog(shape, analog, absolute, binary):
-        for i in range(shape):
-            absolute[i] = abs(analog[i])
-        threshold = 0.5*absolute[np.argmax(absolute)]
-        for i in range(shape):
-            binary[i] = absolute[i] > threshold
-        return binary
-    try:
-        print(get_binary_from_analog.inspect_types())
-    except:
-        def get_binary_from_analog(shape, analog, absolute, binary):
-            absolute = abs(analog)
-            binary = absolute > 0.5*max(absolute)
-            return binary
-    binary = get_binary_from_analog(shape, beep_samples, absolute, binary)
-    #print(get_binary_from_analog.inspect_types())
-    return rle(binary)
-
-class PacketBase(object):
-    def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
-        self.packet = packet
-        self.errors = errors
-        self.deciles = deciles
-        self.raw = raw
-
-def get_decile_durations(pulses):
-    # return a dict mapping value to a 2-tuple of widths
+def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
     values = set([value for (width, value) in pulses])
     deciles = {}
     if ilen(pulses) < 10:
@@ -105,15 +48,11 @@ def get_decile_durations(pulses):
         deciles[value] = (short_decile, long_decile)
     return deciles
 
-def find_pulse_groups(pulses, deciles):
-    # find segments of quiet that are 9x longer than the short period
-    # this is naive, if a trivial pulse width encoding is used, any sequence of 9 or more short sequential silences will be read as a packet break
+def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
     breaks = [i[0] for i in enumerate(pulses) if (i[1][0] > min(deciles[0][0],deciles[1][0])  * 9) and (i[1][1] == False)]
-    # find periodicity of the packets
     break_deltas = [y-x for (x,y) in zip(breaks, breaks[1::])]
     if len(break_deltas) < 2:
         return None
-    # ignoring few-pulse packets, if you have more than three different fragment sizes, try to regularize
     elif len(set([bd for bd in break_deltas if bd > 3])) > 3:
         try:
             d_mode = mode(break_deltas)
@@ -126,13 +65,19 @@ def find_pulse_groups(pulses, deciles):
             return None
         # discard breaks more than 10% from expected position
         breaks = [x for x in breaks if True in [abs(x-y) < breaks2[1]//10 for y in breaks2]]
-        # define packet pulses as the segment between breaks
     return breaks
 
-def demodulator(pulses):
+class PacketBase(object):
+    def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
+        self.packet = packet
+        self.errors = errors
+        self.deciles = deciles
+        self.raw = raw
+
+def demodulator(pulses): # -> [PacketBase]
     packets = []
     # drop short (clearly erroneous, spurious) pulses
-    pulses = [x for x in rerle([x for x in pulses if x[0] > 2])]
+    pulses = rerle([x for x in pulses if x[0] > 2])
     deciles = get_decile_durations(pulses)
     if not deciles:
         return packets
@@ -159,7 +104,7 @@ def demodulator(pulses):
             packets.append(result)
     return packets
 
-def silver_sensor(packet):
+def silver_sensor(packet): # -> None | dictionary
     # TODO: CRC
     # TODO: battery OK
     # TODO: handle preamble pulse
@@ -215,7 +160,6 @@ async def main():
         else:
             pulses = get_pulses_from_info(info)
             print('got pulses', time.time()-start)
-        res = None
         decoded = False
         if len(pulses) > 10:
             for packet in demodulator(pulses):

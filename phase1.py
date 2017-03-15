@@ -41,14 +41,12 @@ async def main():
     # TODO: if you don't set gain, and query this parameter, python segfaults..
     print('  gain: %s dB' % sdr.gain)
 
-
     print('Streaming bytes...')
     redis_connection = await get_connection() 
+    print('Connected to Redis...')
     await process_samples(sdr, redis_connection)
     await sdr.stop()
-
     print('Done')
-
     sdr.close()
 
 
