@@ -4,6 +4,7 @@ import numexpr3 as ne3
 import numpy as np
 import bottleneck as bn
 import cytoolz as cz
+import numba as nb
 import time
 import itertools
 import beepshrink
@@ -12,6 +13,27 @@ ne3.set_num_threads(2)
 
 ilen = cz.count
 
+@nb.njit(cache=True, nogil=True) 
+def counts(arr):
+    res = np.zeros((arr.size, 2), dtype=np.int32)
+    i = 0
+    cnts = 0
+    last = arr[1]
+    for item in arr[1:]:
+        if item == last:
+            cnts += 1
+        else:
+            res[i, 0] = cnts
+            res[i, 1] = last
+            last = item
+            cnts = 1
+            i += 1
+    res[i, 0] = cnts
+    res[i, 1] = last
+    i += 1
+    return res[:i]
+
+#rle = lambda xs: counts(xs)
 rle = lambda xs: [(ilen(gp), x) for x, gp in itertools.groupby(xs)]
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
 # takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
@@ -22,16 +44,43 @@ debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 
 smoother = lambda xs: bn.move_mean(xs, 32, 1)
 
-def get_pulses_from_analog(info):
+
+def get_pulses_from_info(info):
     beep_samples = beepshrink.decompress(**info)
-    beep_absolute = np.empty(info['size'], dtype='float32')
+    shape = beep_samples.shape
+    beep_absolute = np.empty(shape, dtype='float32')
     ne3.evaluate('beep_absolute = abs(beep_samples)')
     beep_smoothed = smoother(beep_absolute)
     threshold = 0.5*bn.nanmax(beep_smoothed)
-    beep_binary = np.empty(info['size'], dtype=bool)
+    beep_binary = np.empty(shape, dtype=bool)
     ne3.evaluate('beep_binary = beep_smoothed > threshold')
     pulses = rle(beep_binary)
     return pulses
+
+def get_pulses_from_info2(info):
+    beep_samples = beepshrink.decompress(**info)
+    shape = beep_samples.shape
+    absolute = np.zeros(shape, dtype='float32')
+    binary = np.zeros(shape, dtype='uint8')
+    shape = beep_samples.shape[0]
+    @nb.njit(cache=True, nogil=True)
+    def get_binary_from_analog(shape, analog, absolute, binary):
+        for i in range(shape):
+            absolute[i] = abs(analog[i])
+        threshold = 0.5*absolute[np.argmax(absolute)]
+        for i in range(shape):
+            binary[i] = absolute[i] > threshold
+        return binary
+    try:
+        print(get_binary_from_analog.inspect_types())
+    except:
+        def get_binary_from_analog(shape, analog, absolute, binary):
+            absolute = abs(analog)
+            binary = absolute > 0.5*max(absolute)
+            return binary
+    binary = get_binary_from_analog(shape, beep_samples, absolute, binary)
+    #print(get_binary_from_analog.inspect_types())
+    return rle(binary)
 
 class PacketBase(object):
     def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
@@ -164,7 +213,7 @@ async def main():
         if info in [{}, None]:
             pulses = []
         else:
-            pulses = get_pulses_from_analog(info)
+            pulses = get_pulses_from_info(info)
             print('got pulses', time.time()-start)
         res = None
         decoded = False

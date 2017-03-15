@@ -8,6 +8,7 @@ from asyncio_redis.encoders import BytesEncoder, BaseEncoder
 import cbor
 import bottleneck as bn
 import numexpr3 as ne3
+import gc
 
 class CborEncoder(BaseEncoder):
     native_type = object
@@ -98,6 +99,7 @@ async def process_samples(sdr, connection):
                 print(len(block)/sdr.rs, pwr, total/count, size, dtype, len(compressed) / block.nbytes)
                 loud = False
                 relevant_blocks = []
+                gc.collect()
         last = time.time()
 
 

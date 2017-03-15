@@ -8,10 +8,9 @@ for fname in sys.argv[1::]:
     print('analysing', fname)
     f = open(fname, 'rb').read()
     g = cbor.loads(f)
-    h = beepshrink.decompress(**g)
 
     start = time.time()
-    pulses = packetizer.get_pulses_from_analog(g)
+    pulses = packetizer.get_pulses_from_info(g)
     end = time.time()
     print(end-start)
     packets = packetizer.demodulator(pulses)
