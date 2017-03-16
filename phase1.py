@@ -1,14 +1,16 @@
 import asyncio
-import math
 import time
-import numpy as np
-import beepshrink
-import asyncio_redis
-from asyncio_redis.encoders import BytesEncoder, BaseEncoder 
-import cbor
-import bottleneck as bn
-import numexpr3 as ne3
 import gc
+import cbor
+
+import numpy as np
+
+import asyncio_redis
+from asyncio_redis.encoders import BaseEncoder
+
+import numexpr3 as ne3
+
+import beepshrink
 
 class CborEncoder(BaseEncoder):
     native_type = object
@@ -20,7 +22,7 @@ class CborEncoder(BaseEncoder):
 
 async def get_connection():
     redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
-    return redis_connection 
+    return redis_connection
 
 async def main():
     from rtlsdr import rtlsdraio
@@ -42,7 +44,7 @@ async def main():
     print('  gain: %s dB' % sdr.gain)
 
     print('Streaming bytes...')
-    redis_connection = await get_connection() 
+    redis_connection = await get_connection()
     print('Connected to Redis...')
     await process_samples(sdr, redis_connection)
     await sdr.stop()
@@ -74,7 +76,7 @@ async def process_samples(sdr, connection):
         complex_samples = packed_bytes_to_iq(byte_samples)
         abs_expr = ne3.NumExpr('float_samples = abs(complex_samples)')
         abs_expr.run(check_arrays = False)
-        pwr = bn.nansum(float_samples)
+        pwr = np.sum(float_samples)
         if total == 0:
             total = pwr
         if pwr > (total / count):
@@ -90,8 +92,8 @@ async def process_samples(sdr, connection):
                 timestamp = time.time()
                 block = np.concatenate(relevant_blocks)
                 size, dtype, compressed = beepshrink.compress(block)
-                frame_samples = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                await connection.set(timestamp, frame_samples) 
+                info = {'size': size, 'dtype': dtype.name, 'data': compressed}
+                await connection.set(timestamp, info)
                 await connection.lpush('eof_timestamps', [timestamp])
                 await connection.expireat(timestamp, int(timestamp+600))
                 print(len(block)/sdr.rs, pwr, total/count, size, dtype, len(compressed) / block.nbytes)
