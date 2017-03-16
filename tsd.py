@@ -18,6 +18,17 @@ class TimeSeriesDatastore(object):
         self.conn.commit()
         self.cursor = self.conn.cursor()
 
+    def get_measurement_vectors(self, start=0, stop=-1):
+        if stop == -1:
+            stop = time.time()
+        selector = 'SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s' % (
+            str(start), str(stop))
+        samples = self.cursor.execute(selector)
+        labels = 'timestamp sensor_uid units value'.split()
+        values = dict(zip(labels, zip(*samples)))
+        values['units'] = [unit_list[unit] for unit in values['units']]
+        return values
+
     def get_measurements(self, start=0, stop=-1):
         if stop == -1:
             stop = time.time()
@@ -56,6 +67,5 @@ class TimeSeriesDatastore(object):
 
 if __name__ in ["__main__", "__console__"]:
     tsd = TimeSeriesDatastore()
-    for v in tsd.get_measurements(time.time()-1000):
+    for v in tsd.get_measurements():
         print(v)
-    #tsd.add_measurement(time.time(), 0, 'degC', 37.0)
