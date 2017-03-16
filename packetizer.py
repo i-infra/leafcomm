@@ -39,27 +39,27 @@ def get_pulses_from_info(info):
     return pulses
 
 def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
-    values = set([value for (width, value) in pulses])
+    values = np.unique(pulses.T[1])
     deciles = {}
-    if ilen(pulses) < 10:
-        return None
-    for value in sorted(list(values)):
-        counts = sorted([width for (width, x) in pulses if x == value])
+    if len(pulses) < 10:
+        return {}
+    for value in values:
+        counts = np.sort(pulses[np.where(pulses.T[1] == value)].T[0])
         tenth = len(counts) // 10
         if not tenth:
-            return None
-        short_decile = int(mean(counts[1*tenth:2*tenth]))
-        long_decile = int(mean(counts[8*tenth:9*tenth]))
+            return {}
+        short_decile = int(np.mean(counts[1*tenth:2*tenth]))
+        long_decile = int(np.mean(counts[8*tenth:9*tenth]))
         deciles[value] = (short_decile, long_decile)
     return deciles
 
 def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
     cutoff = min(deciles[0][0],deciles[1][0])*9
-    breaks = [idx for (idx,(ct,val)) in enumerate(pulses) if (ct > cutoff) and (val == False)]
-    break_deltas = [y-x for (x,y) in zip(breaks, breaks[1::])]
+    breaks = np.where(pulses.T[0] > cutoff)[0]
+    break_deltas = np.diff(breaks)
     if len(break_deltas) < 2:
-        return None
-    elif len(set([bd for bd in break_deltas if bd > 3])) > 3:
+        return []
+    elif len(np.unique(break_deltas[np.where(break_deltas > 3)])) > 3:
         try:
             d_mode = mode(break_deltas)
         # if all values different, use mean as mode
@@ -68,7 +68,7 @@ def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
         # determine expected periodicity of packet widths
         breaks2 = [x*d_mode for x in range(round(max(breaks) // d_mode))]
         if len(breaks2) < 2:
-            return None
+            return []
         # discard breaks more than 10% from expected position
         breaks = [x for x in breaks if True in [abs(x-y) < breaks2[1]//10 for y in breaks2]]
     return breaks
@@ -79,11 +79,12 @@ def demodulator(pulses): # -> [PacketBase]
     packets = []
     # drop short (clearly erroneous, spurious) pulses
     pulses = rerle([x for x in pulses if x[0] > 2])
+    pulses = np.array(pulses)
     deciles = get_decile_durations(pulses)
-    if not deciles:
+    if deciles == {}:
         return []
     breaks = find_pulse_groups(pulses, deciles)
-    if not breaks:
+    if len(breaks) == 0:
         return []
     for (x,y) in zip(breaks, breaks[1::]):
         packet = pulses[x+1:y]
