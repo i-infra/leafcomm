@@ -1,10 +1,12 @@
+import sys
+sys.path.append('./') 
+
 import asyncio
 import beepshrink
 import phase1
 import cbor
 import base64
 
-import sys
 
 # accepts one argument, the ascii base64 representation of the cbor-encoded f64 timestamp
 # this is awkward, but unambiguous and space-efficient. you can at least type it, don't complain.
