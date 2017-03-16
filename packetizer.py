@@ -11,11 +11,8 @@ import beepshrink
 
 ne3.set_num_threads(2)
 
-ilen = cz.count #lambda seq: len(seq) if hasattr(seq, '__len__') else sum(1 for i in seq)
-
-rle = lambda xs: [(ilen(gp), x) for x, gp in itertools.groupby(xs)]
+rle = lambda xs: [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
-# takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
 rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
 
 L = 0
