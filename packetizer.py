@@ -54,7 +54,7 @@ def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
     return deciles
 
 def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
-    cutoff = min(*deciles[0])*9
+    cutoff = min(deciles[0][0],deciles[1][0])*9
     breaks = [idx for (idx,(ct,val)) in enumerate(pulses) if (ct > cutoff) and (val == False)]
     break_deltas = [y-x for (x,y) in zip(breaks, breaks[1::])]
     if len(break_deltas) < 2:
