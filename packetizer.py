@@ -18,7 +18,11 @@ rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x i
 # takes [(2, True), (2, True), (3, False)] -> [(4, True), (3, False)] without expansion
 rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
 
-printer = lambda xs: ''.join([{0: '░', 1: '█', 2: '╳'}[x] for x in xs])
+L = 0
+H = 1
+E = 2
+
+printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 smoother = lambda xs: bn.move_mean(xs, 32, 1)
 
@@ -50,7 +54,8 @@ def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
     return deciles
 
 def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
-    breaks = [i[0] for i in enumerate(pulses) if (i[1][0] > min(deciles[0][0],deciles[1][0])  * 9) and (i[1][1] == False)]
+    cutoff = min(*deciles[0])*9
+    breaks = [idx for (idx,(ct,val)) in enumerate(pulses) if (ct > cutoff) and (val == False)]
     break_deltas = [y-x for (x,y) in zip(breaks, breaks[1::])]
     if len(break_deltas) < 2:
         return None
@@ -76,10 +81,10 @@ def demodulator(pulses): # -> [PacketBase]
     pulses = rerle([x for x in pulses if x[0] > 2])
     deciles = get_decile_durations(pulses)
     if not deciles:
-        return packets
+        return []
     breaks = find_pulse_groups(pulses, deciles)
     if not breaks:
-        return packets
+        return []
     for (x,y) in zip(breaks, breaks[1::]):
         packet = pulses[x+1:y]
         pb = []
@@ -94,7 +99,7 @@ def demodulator(pulses): # -> [PacketBase]
                         valid = True
             if not valid:
                 errors += [chip]
-                pb += [2]
+                pb.append(E)
         if len(pb) > 4:
             result = PacketBase(pb, errors, deciles, pulses[x:y])
             packets.append(result)
@@ -175,8 +180,7 @@ async def main():
         else:
             await connection.delete([timestamp])
 
-        end = time.time()
-        print(end-start)
+        print('end', time.time()-start)
 
 if __name__ == "__main__":
     import asyncio
