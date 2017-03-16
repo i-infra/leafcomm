@@ -6,6 +6,7 @@ import bottleneck as bn
 import cytoolz as cz
 import time
 import itertools
+import typing
 import beepshrink
 
 ne3.set_num_threads(2)
@@ -67,12 +68,7 @@ def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
         breaks = [x for x in breaks if True in [abs(x-y) < breaks2[1]//10 for y in breaks2]]
     return breaks
 
-class PacketBase(object):
-    def __init__(self, packet = [], errors = None, deciles = {}, raw = []):
-        self.packet = packet
-        self.errors = errors
-        self.deciles = deciles
-        self.raw = raw
+PacketBase = typing.NamedTuple('PacketBase', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
 
 def demodulator(pulses): # -> [PacketBase]
     packets = []
