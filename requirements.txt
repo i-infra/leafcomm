@@ -1,6 +1,5 @@
 asyncio-redis
 Bottleneck
-cytoolz
 blosc
 cbor
 cffi

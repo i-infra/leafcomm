@@ -1,10 +1,8 @@
 from statistics import mode, mean, StatisticsError
 
-import numexpr3 as ne3
 import numpy as np
+import numexpr3 as ne3
 import bottleneck as bn
-import cytoolz as cz
-import time
 import itertools
 import typing
 import beepshrink
@@ -15,9 +13,7 @@ rle = lambda xs: [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
 rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
 
-L = 0
-H = 1
-E = 2
+(L,H,E) = (0,1,2)
 
 printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
@@ -153,12 +149,10 @@ async def main():
         timestamp = await connection.brpop(['eof_timestamps'], 360)
         timestamp = timestamp.value
         info = await connection.get(timestamp)
-        start = time.time()
         if info in [{}, None]:
             pulses = []
         else:
             pulses = get_pulses_from_info(info)
-            print('got pulses', time.time()-start)
         decoded = False
         if len(pulses) > 10:
             for packet in demodulator(pulses):
@@ -166,7 +160,6 @@ async def main():
                 res = silver_sensor(packet)
                 if (res is not None) and decoded is False:
                     uid = (res['channel']+1*1024)+res['uid']
-                    #measurement = timestamp, sensor_uid, units, value)
                     datastore.add_measurement(timestamp, uid, 'degc', res['temperature'])
                     datastore.add_measurement(timestamp, uid, 'rh', res['humidity'])
                     print(res)
@@ -177,8 +170,6 @@ async def main():
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
             await connection.delete([timestamp])
-
-        print('end', time.time()-start)
 
 if __name__ == "__main__":
     import asyncio
