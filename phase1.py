@@ -30,7 +30,6 @@ class CborEncoder(BaseEncoder):
     def decode_to_native(self, data):
         return cbor.loads(data)
 
-
 async def get_connection():
     import asyncio_redis
     redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
@@ -93,34 +92,6 @@ async def process_samples(sdr, connection):
                 relevant_blocks = []
                 gc.collect()
         last = time.time()
-
-async def phase1_main():
-    from rtlsdr import rtlsdraio
-    sdr = rtlsdraio.RtlSdrAio()
-
-    print('Configuring SDR...')
-    # multiple of 2, 5 - should have neon butterflies for at least these
-    # lowest "sane" sample rate
-    sdr.rs = 256000
-    # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
-    # offset center frequency for 433.92 ism
-    sdr.fc = 434e6
-    # arbitrary small number, adjust based on antenna and range
-    sdr.gain = 3
-    #sdr.set_manual_gain_enabled(False)
-    print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
-    print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
-    # TODO: if you don't set gain, and query this parameter, python segfaults..
-    print('  gain: %s dB' % sdr.gain)
-
-    print('Streaming bytes...')
-    redis_connection = await get_connection()
-    print('Connected to Redis...')
-    await process_samples(sdr, redis_connection)
-    await sdr.stop()
-    print('Done')
-    sdr.close()
-
 
 def get_pulses_from_info(info):
     beep_samples = decompress(**info)
@@ -237,6 +208,33 @@ def silver_sensor(packet): # -> None | dictionary
             if n[0] == 5:
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return None
+
+async def phase1_main():
+    from rtlsdr import rtlsdraio
+    sdr = rtlsdraio.RtlSdrAio()
+
+    print('Configuring SDR...')
+    # multiple of 2, 5 - should have neon butterflies for at least these
+    # lowest "sane" sample rate
+    sdr.rs = 256000
+    # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
+    # offset center frequency for 433.92 ism
+    sdr.fc = 434e6
+    # arbitrary small number, adjust based on antenna and range
+    sdr.gain = 3
+    #sdr.set_manual_gain_enabled(False)
+    print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
+    print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
+    # TODO: if you don't set gain, and query this parameter, python segfaults..
+    print('  gain: %s dB' % sdr.gain)
+
+    print('Streaming bytes...')
+    redis_connection = await get_connection()
+    print('Connected to Redis...')
+    await process_samples(sdr, redis_connection)
+    await sdr.stop()
+    print('Done')
+    sdr.close()
 
 async def packetizer_main():
     import tsd
