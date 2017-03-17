@@ -1,7 +1,7 @@
 import sys
 sys.path.append('./')
-import packetizer, cbor
-import numpy as np
+import phase1
+import cbor
 
 import time
 
@@ -11,11 +11,12 @@ for fname in sys.argv[1::]:
     start = time.time()
     info = cbor.loads(f)
 
-    pulses = packetizer.get_pulses_from_info(info)
-    packets = packetizer.demodulator(pulses)
+    pulses = phase1.get_pulses_from_info(info)
+    print(pulses)
+    packets = phase1.demodulator(pulses)
 
     for packet in packets:
-        print(packetizer.printer(packet.packet))
+        print(phase1.printer(packet.packet))
         print(packet.errors, packet.deciles)
         if packet.errors == []:
             break

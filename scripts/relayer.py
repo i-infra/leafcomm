@@ -1,7 +1,6 @@
 import sys
 sys.path.append('./')
 import asyncio
-import beepshrink
 import phase1
 import cbor
 import base64
@@ -16,7 +15,7 @@ async def main():
     byte_count = 0
     def forwarder(info):
         if writer is not None:
-            ba = beepshrink.decompress(**info)*255
+            ba = phase1.decompress(**info)*255
             writer.write(ba.tobytes())
             ab = ba*0.0
             writer.write(ab.tobytes())

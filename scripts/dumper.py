@@ -2,7 +2,6 @@ import sys
 sys.path.append('./') 
 
 import asyncio
-import beepshrink
 import phase1
 import cbor
 import base64

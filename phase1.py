@@ -74,7 +74,6 @@ async def process_samples(sdr, connection):
             total = pwr
         if pwr > (total / count):
             total += (pwr - (total/count))/100.
-            print(time.time()-last, (block_size/2)/sdr.rs, pwr, total/count)
             loud = True
             relevant_blocks.append(complex_samples)
         else:
@@ -86,10 +85,10 @@ async def process_samples(sdr, connection):
                 block = np.concatenate(relevant_blocks)
                 size, dtype, compressed = compress(block)
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
+                print(len(block)/sdr.rs, pwr, total/count, size, dtype, len(compressed) / block.nbytes)
                 await connection.set(timestamp, info)
                 await connection.lpush('eof_timestamps', [timestamp])
                 await connection.expireat(timestamp, int(timestamp+600))
-                print(len(block)/sdr.rs, pwr, total/count, size, dtype, len(compressed) / block.nbytes)
                 loud = False
                 relevant_blocks = []
                 gc.collect()
