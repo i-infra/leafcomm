@@ -11,7 +11,6 @@ ne3.set_num_threads(2)
 
 rle = lambda xs: [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
-rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
 
 (L,H,E) = (0,1,2)
 
@@ -28,7 +27,7 @@ def get_pulses_from_info(info):
     threshold = 0.5*bn.nanmax(beep_smoothed)
     beep_binary = np.empty(shape, dtype=bool)
     ne3.evaluate('beep_binary = beep_smoothed > threshold')
-    pulses = rle(beep_binary)
+    pulses = np.array(rle(beep_binary))
     return pulses
 
 def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
@@ -68,11 +67,7 @@ def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
 
 PacketBase = typing.NamedTuple('PacketBase', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
 
-def demodulator(pulses): # -> [PacketBase]
-    packets = []
-    # drop short (clearly erroneous, spurious) pulses
-    pulses = rerle([x for x in pulses if x[0] > 2])
-    pulses = np.array(pulses)
+def demodulator(pulses): # -> generator<PacketBase>
     deciles = get_decile_durations(pulses)
     if deciles == {}:
         return []
@@ -96,8 +91,7 @@ def demodulator(pulses): # -> [PacketBase]
                 pb.append(E)
         if len(pb) > 4:
             result = PacketBase(pb, errors, deciles, pulses[x:y])
-            packets.append(result)
-    return packets
+            yield result
 
 def silver_sensor(packet): # -> None | dictionary
     # TODO: CRC
