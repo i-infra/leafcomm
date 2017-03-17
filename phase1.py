@@ -2,6 +2,7 @@ import asyncio
 import time
 import gc
 import itertools
+import multiprocessing
 import typing
 import cbor
 import blosc
@@ -46,7 +47,6 @@ printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 smoother = lambda xs: bn.move_mean(xs, 32, 1)
 
-
 def packed_bytes_to_iq(samples):
     bytes_np = np.ctypeslib.as_array(samples)
     iq = np.empty(len(samples)//2, 'complex64')
@@ -59,9 +59,7 @@ async def process_samples(sdr, connection):
     block_size = 1024*32
     total = 0
     count = 1
-    last = time.time()
     relevant_blocks = []
-    block_time = time.time()
     loud = False
     float_samples = np.empty(block_size//2, dtype='float32')
     async for byte_samples in sdr.stream(block_size, format='bytes'):
@@ -84,14 +82,13 @@ async def process_samples(sdr, connection):
                 block = np.concatenate(relevant_blocks)
                 size, dtype, compressed = compress(block)
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                print(len(block)/sdr.rs, pwr, total/count, size, dtype, len(compressed) / block.nbytes)
+                print('phase1', time.time()-timestamp, pwr)
                 await connection.set(timestamp, info)
                 await connection.lpush('eof_timestamps', [timestamp])
                 await connection.expireat(timestamp, int(timestamp+600))
                 loud = False
                 relevant_blocks = []
-                gc.collect()
-        last = time.time()
+                print('phase1: collected', gc.collect())
 
 def get_pulses_from_info(info):
     beep_samples = decompress(**info)
@@ -240,6 +237,7 @@ async def packetizer_main():
     import tsd
     connection = await get_connection()
     datastore = tsd.TimeSeriesDatastore()
+    print('Connected to Datastore...')
     while True:
         timestamp = await connection.brpop(['eof_timestamps'], 360)
         timestamp = timestamp.value
@@ -257,7 +255,7 @@ async def packetizer_main():
                     uid = (res['channel']+1*1024)+res['uid']
                     datastore.add_measurement(timestamp, uid, 'degc', res['temperature'])
                     datastore.add_measurement(timestamp, uid, 'rh', res['humidity'])
-                    print(res)
+                    print('packetizer', time.time()-timestamp, res)
                     decoded = True
                     break
         if (len(pulses) != 0) and (decoded == False):
@@ -265,8 +263,16 @@ async def packetizer_main():
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
             await connection.delete([timestamp])
+        print('packetizer: collected', gc.collect())
+
+def spawner(future_yielder):
+    def loopwrapper(main):
+        loop = asyncio.get_event_loop()
+        asyncio.ensure_future(main())
+        loop.run_forever()
+    multiprocessing.Process(target=loopwrapper, args=(future_yielder,)).start()
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.create_task(packetizer_main())
-    loop.run_until_complete(phase1_main())
+    spawner(phase1_main)
+    spawner(packetizer_main)
+    asyncio.get_event_loop().run_forever()
