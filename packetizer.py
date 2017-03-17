@@ -5,7 +5,8 @@ import numexpr3 as ne3
 import bottleneck as bn
 import itertools
 import typing
-import beepshrink
+
+import phase1
 
 ne3.set_num_threads(2)
 
@@ -19,7 +20,7 @@ debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 smoother = lambda xs: bn.move_mean(xs, 32, 1)
 
 def get_pulses_from_info(info):
-    beep_samples = beepshrink.decompress(**info)
+    beep_samples = phase1.decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype='float32')
     ne3.evaluate('beep_absolute = abs(beep_samples)')
@@ -136,7 +137,6 @@ def silver_sensor(packet): # -> None | dictionary
 
 async def main():
     import tsd
-    import phase1
     connection = await phase1.get_connection()
     datastore = tsd.TimeSeriesDatastore()
     while True:

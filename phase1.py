@@ -2,15 +2,20 @@ import asyncio
 import time
 import gc
 import cbor
+import blosc
 
 import numpy as np
 
-import asyncio_redis
 from asyncio_redis.encoders import BaseEncoder
 
 import numexpr3 as ne3
 
-import beepshrink
+compress = lambda in_: blosc.compress(in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
+
+def decompress(size, dtype, data):
+    out = np.empty(size, dtype)
+    blosc.decompress_ptr(data, out.__array_interface__['data'][0])
+    return out
 
 class CborEncoder(BaseEncoder):
     native_type = object
@@ -21,36 +26,9 @@ class CborEncoder(BaseEncoder):
 
 
 async def get_connection():
+    import asyncio_redis
     redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
     return redis_connection
-
-async def main():
-    from rtlsdr import rtlsdraio
-    sdr = rtlsdraio.RtlSdrAio()
-
-    print('Configuring SDR...')
-    # multiple of 2, 5 - should have neon butterflies for at least these
-    # lowest "sane" sample rate
-    sdr.rs = 256000
-    # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
-    # offset center frequency for 433.92 ism
-    sdr.fc = 434e6
-    # arbitrary small number, adjust based on antenna and range
-    sdr.gain = 3
-    #sdr.set_manual_gain_enabled(False)
-    print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
-    print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
-    # TODO: if you don't set gain, and query this parameter, python segfaults..
-    print('  gain: %s dB' % sdr.gain)
-
-    print('Streaming bytes...')
-    redis_connection = await get_connection()
-    print('Connected to Redis...')
-    await process_samples(sdr, redis_connection)
-    await sdr.stop()
-    print('Done')
-    sdr.close()
-
 
 complex_to_stereo = lambda a: np.dstack((a.real, a.imag))[0]
 stereo_to_complex = lambda a: a[0] + a[1]*1j
@@ -91,7 +69,7 @@ async def process_samples(sdr, connection):
                 relevant_blocks.append(complex_samples)
                 timestamp = time.time()
                 block = np.concatenate(relevant_blocks)
-                size, dtype, compressed = beepshrink.compress(block)
+                size, dtype, compressed = compress(block)
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                 await connection.set(timestamp, info)
                 await connection.lpush('eof_timestamps', [timestamp])
@@ -102,6 +80,32 @@ async def process_samples(sdr, connection):
                 gc.collect()
         last = time.time()
 
+async def main():
+    from rtlsdr import rtlsdraio
+    sdr = rtlsdraio.RtlSdrAio()
+
+    print('Configuring SDR...')
+    # multiple of 2, 5 - should have neon butterflies for at least these
+    # lowest "sane" sample rate
+    sdr.rs = 256000
+    # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
+    # offset center frequency for 433.92 ism
+    sdr.fc = 434e6
+    # arbitrary small number, adjust based on antenna and range
+    sdr.gain = 3
+    #sdr.set_manual_gain_enabled(False)
+    print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
+    print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
+    # TODO: if you don't set gain, and query this parameter, python segfaults..
+    print('  gain: %s dB' % sdr.gain)
+
+    print('Streaming bytes...')
+    redis_connection = await get_connection()
+    print('Connected to Redis...')
+    await process_samples(sdr, redis_connection)
+    await sdr.stop()
+    print('Done')
+    sdr.close()
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
