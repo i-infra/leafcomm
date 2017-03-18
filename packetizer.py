@@ -7,8 +7,11 @@ import itertools
 import typing
 import beepshrink
 
-ne3.set_num_threads(2)
+import tsd
+datastore = tsd.TimeSeriesDatastore()
 
+ne3.set_num_threads(2)
+rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
 rle = lambda xs: [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
 rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
 
@@ -18,17 +21,33 @@ printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 smoother = lambda xs: bn.move_mean(xs, 32, 1)
 
-def get_pulses_from_info(info):
+from scipy.signal import butter, lfilter, freqz
+
+def butter_lowpass(cutoff, fs, order=5):
+    b, a = butter(order, cutoff / (0.5*fs), btype='low', analog=False)
+    b = b.astype('float32')
+    a = a.astype('float32')
+    return b, a
+
+def butter_lowpass_filter(data, cutoff, fs, order=5):
+    b, a = butter_lowpass(cutoff, fs, order=order)
+    y = lfilter(b, a, data)
+    return y
+
+scismoother = lambda xs: butter_lowpass_filter(xs, 2e3, 256e3, order=4)
+
+def get_pulses_from_info(info, smoother=smoother):
     beep_samples = beepshrink.decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype='float32')
     ne3.evaluate('beep_absolute = abs(beep_samples)')
     beep_smoothed = smoother(beep_absolute)
-    threshold = 0.5*bn.nanmax(beep_smoothed)
+    threshold = 1.1*bn.nanmean(beep_smoothed)
     beep_binary = np.empty(shape, dtype=bool)
     ne3.evaluate('beep_binary = beep_smoothed > threshold')
-    pulses = np.array(rle(beep_binary))
-    return pulses
+    pulses = rle(beep_binary)
+    #pulses = rerle([x for x in rle(beep_binary) if x[0] > 2])
+    return np.array(pulses)
 
 def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
     values = np.unique(pulses.T[1])
@@ -47,11 +66,13 @@ def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
 
 def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
     cutoff = min(deciles[0][0],deciles[1][0])*9
-    breaks = np.where(pulses.T[0] > cutoff)[0]
+    breaks = np.logical_and(pulses.T[0] > cutoff, pulses.T[1] == L).nonzero()[0]
     break_deltas = np.diff(breaks)
-    if len(break_deltas) < 2:
+    # fail on either extreme
+    if (len(break_deltas) < 2) or (len(break_deltas) > 50):
         return []
     elif len(np.unique(break_deltas[np.where(break_deltas > 3)])) > 3:
+        print(break_deltas)
         try:
             d_mode = mode(break_deltas)
         # if all values different, use mean as mode
@@ -69,6 +90,7 @@ PacketBase = typing.NamedTuple('PacketBase', [('packet', list), ('errors', list)
 
 def demodulator(pulses): # -> generator<PacketBase>
     deciles = get_decile_durations(pulses)
+    print(deciles)
     if deciles == {}:
         return []
     breaks = find_pulse_groups(pulses, deciles)
@@ -134,35 +156,42 @@ def silver_sensor(packet): # -> None | dictionary
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return None
 
+
+def decode_pulses(pulses): # -> {}
+    if len(pulses) > 10:
+        for packet in demodulator(pulses):
+            print(printer(packet.packet))
+            res = silver_sensor(packet)
+            if (res is not None):
+                res['uid'] = (res['channel']+1*1024)+res['uid']
+                return res
+    return {}
+
+def try_decode(info, timestamp = 0): # -> {}
+    for smoother_ in [smoother, scismoother]:
+        pulses = get_pulses_from_info(info, smoother_)
+        decoded = decode_pulses(pulses)
+        if decoded != {}:
+            return decoded
+    return {}
+
 async def main():
-    import tsd
     import phase1
     connection = await phase1.get_connection()
-    datastore = tsd.TimeSeriesDatastore()
     while True:
         timestamp = await connection.brpop(['eof_timestamps'], 360)
         timestamp = timestamp.value
         info = await connection.get(timestamp)
         if info in [{}, None]:
-            pulses = []
+            decoded = {}
         else:
-            pulses = get_pulses_from_info(info)
-        decoded = False
-        if len(pulses) > 10:
-            for packet in demodulator(pulses):
-                print(printer(packet.packet))
-                res = silver_sensor(packet)
-                if (res is not None) and decoded is False:
-                    uid = (res['channel']+1*1024)+res['uid']
-                    datastore.add_measurement(timestamp, uid, 'degc', res['temperature'])
-                    datastore.add_measurement(timestamp, uid, 'rh', res['humidity'])
-                    print(res)
-                    decoded = True
-                    break
-        if (len(pulses) != 0) and (decoded == False):
+            decoded = try_decode(info, timestamp)
+        if decoded == {}:
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
+            datastore.add_measurement(timestamp, decoded['uid'], 'degc', decoded['temperature'])
+            datastore.add_measurement(timestamp, decoded['uid'], 'rh', decoded['humidity'])
             await connection.delete([timestamp])
 
 if __name__ == "__main__":

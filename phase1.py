@@ -2,7 +2,6 @@ import asyncio
 import time
 import gc
 import cbor
-
 import numpy as np
 
 import asyncio_redis
@@ -44,9 +43,7 @@ async def main():
     print('  gain: %s dB' % sdr.gain)
 
     print('Streaming bytes...')
-    redis_connection = await get_connection()
-    print('Connected to Redis...')
-    await process_samples(sdr, redis_connection)
+    await process_samples(sdr)#, redis_connection)
     await sdr.stop()
     print('Done')
     sdr.close()
@@ -55,52 +52,65 @@ async def main():
 complex_to_stereo = lambda a: np.dstack((a.real, a.imag))[0]
 stereo_to_complex = lambda a: a[0] + a[1]*1j
 
-def packed_bytes_to_iq(samples):
+def packed_bytes_to_iq(samples, out = None):
+    if out is None:
+        iq = np.empty(len(samples)//2, 'complex64')
+    else:
+        iq = out
     bytes_np = np.ctypeslib.as_array(samples)
-    iq = np.empty(len(samples)//2, 'complex64')
     iq.real, iq.imag = bytes_np[::2], bytes_np[1::2]
     iq /= (255/2)
     iq -= (1 + 1j)
-    return iq
+    if out is None:
+        return iq
 
-async def process_samples(sdr, connection):
-    block_size = 1024*32
-    total = 0
-    count = 1
+async def push_sample(timestamp, info):
+    connection = await get_connection()
+    await connection.set(timestamp, info)
+    await connection.lpush('eof_timestamps', [timestamp])
+    await connection.expireat(timestamp, int(timestamp+600))
+
+async def process_samples(sdr):
+    (block_size, max_blocks) = (1024*32, 40)
+    samp_size = block_size // 2
+    (total, acc, count) = (0, 0, 1)
     last = time.time()
-    relevant_blocks = []
-    block_time = time.time()
     loud = False
-    float_samples = np.empty(block_size//2, dtype='float32')
+    complex_samples = np.empty(samp_size, 'complex64')
+    float_samples = np.empty(samp_size, dtype='float32')
+    block = np.empty(samp_size*max_blocks, 'complex64')
+    absoluter = ne3.NumExpr('float_samples = abs(complex_samples)')
     async for byte_samples in sdr.stream(block_size, format='bytes'):
-        complex_samples = packed_bytes_to_iq(byte_samples)
-        abs_expr = ne3.NumExpr('float_samples = abs(complex_samples)')
-        abs_expr.run(check_arrays = False)
+        packed_bytes_to_iq(byte_samples, complex_samples)
+        #ne3.evaluate('float_samples = abs(complex_samples)')
+        absoluter.run(float_samples = float_samples, complex_samples = complex_samples)
+        #float_samples = np.abs(complex_samples)
         pwr = np.sum(float_samples)
         if total == 0:
             total = pwr
         if pwr > (total / count):
             total += (pwr - (total/count))/100.
-            print(time.time()-last, (block_size/2)/sdr.rs, pwr, total/count)
+            print(time.time()-last, acc, pwr, total/count)
             loud = True
-            relevant_blocks.append(complex_samples)
-        else:
+        if loud == True:
+            acc += 1
+            if acc < max_blocks:
+                block[samp_size*acc:samp_size*(acc+1)] = complex_samples
+        if pwr < (total / count):
             total += pwr
             count += 1
             if loud:
-                relevant_blocks.append(complex_samples)
                 timestamp = time.time()
-                block = np.concatenate(relevant_blocks)
-                size, dtype, compressed = beepshrink.compress(block)
+                size, dtype, compressed = beepshrink.compress(block[0:(acc+1)*samp_size])
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                await connection.set(timestamp, info)
-                await connection.lpush('eof_timestamps', [timestamp])
-                await connection.expireat(timestamp, int(timestamp+600))
-                print(len(block)/sdr.rs, pwr, total/count, size, dtype, len(compressed) / block.nbytes)
+                await push_sample(timestamp, info)
+                block.fill(0+0j)
+                print(time.time()-last, acc, pwr, total/count)
                 loud = False
-                relevant_blocks = []
-                gc.collect()
+                acc = 0
         last = time.time()
+        if (count % 1000) == 0:
+            gc.collect()
 
 
 if __name__ == "__main__":
