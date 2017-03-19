@@ -3,40 +3,41 @@ from statistics import mode, mean, StatisticsError
 import numpy as np
 import numexpr3 as ne3
 import bottleneck as bn
-import itertools
+import itertools as its
 import typing
 import beepshrink
 
 import tsd
-datastore = tsd.TimeSeriesDatastore()
+import phase1
 
-ne3.set_num_threads(2)
-rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
-rle = lambda xs: [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
-rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
+rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in its.groupby(xs, lambda x: x[1])]
+rle = lambda xs: [(len(list(gp)), x) for x, gp in its.groupby(xs)]
+rld = lambda xs: its.chain.from_iterable(its.repeat(x, n) for n, x in xs)
 
 (L,H,E) = (0,1,2)
 
 printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
-smoother = lambda xs: bn.move_mean(xs, 32, 1)
+brickwall = lambda xs: bn.move_mean(xs, 32, 1)
 
-from scipy.signal import butter, lfilter, freqz
+try:
+    import scipy
+    from scipy.signal import butter, lfilter, freqz
+    def butter_filter(data, cutoff, fs, btype='low', order=5):
+        normalized_cutoff = cutoff / (0.5*fs)
+        if btype == 'bandpass':
+            normalized_cutoff = [normalized_cutoff // 10, normalized_cutoff]
+        b, a = butter(order, normalized_cutoff, btype=btype, analog=False)
+        b = b.astype('float32')
+        a = a.astype('float32')
+        y = lfilter(b, a, data)
+        return y
+    lowpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'low', order=4)
+    #bandpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'bandpass', order=4)
+except:
+    scipy = None
 
-def butter_lowpass(cutoff, fs, order=5):
-    b, a = butter(order, cutoff / (0.5*fs), btype='low', analog=False)
-    b = b.astype('float32')
-    a = a.astype('float32')
-    return b, a
-
-def butter_lowpass_filter(data, cutoff, fs, order=5):
-    b, a = butter_lowpass(cutoff, fs, order=order)
-    y = lfilter(b, a, data)
-    return y
-
-scismoother = lambda xs: butter_lowpass_filter(xs, 2e3, 256e3, order=4)
-
-def get_pulses_from_info(info, smoother=smoother):
+def get_pulses_from_info(info, smoother=brickwall):
     beep_samples = beepshrink.decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype='float32')
@@ -68,29 +69,24 @@ def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
     cutoff = min(deciles[0][0],deciles[1][0])*9
     breaks = np.logical_and(pulses.T[0] > cutoff, pulses.T[1] == L).nonzero()[0]
     break_deltas = np.diff(breaks)
-    # fail on either extreme
-    if (len(break_deltas) < 2) or (len(break_deltas) > 50):
+    if (len(breaks) > 50) or (len(breaks) < 5):
         return []
     elif len(np.unique(break_deltas[np.where(break_deltas > 3)])) > 3:
-        print(break_deltas)
         try:
-            d_mode = mode(break_deltas)
-        # if all values different, use mean as mode
+            d_mode = mode([bd for bd in break_deltas if bd > 3])
         except StatisticsError:
             d_mode = round(mean(break_deltas))
-        # determine expected periodicity of packet widths
-        breaks2 = [x*d_mode for x in range(round(max(breaks) // d_mode))]
-        if len(breaks2) < 2:
+        expected_breaks = [x*d_mode for x in range(round(max(breaks) // d_mode))]
+        if len(expected_breaks) < 2:
             return []
-        # discard breaks more than 10% from expected position
-        breaks = [x for x in breaks if True in [abs(x-y) < breaks2[1]//10 for y in breaks2]]
+        tolerance = d_mode//10
+        breaks = [x for (x,bd) in zip(breaks, break_deltas) if (True in [abs(x-y) < tolerance for y in expected_breaks]) or (bd == d_mode) or (bd < 5)]
     return breaks
 
 PacketBase = typing.NamedTuple('PacketBase', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
 
 def demodulator(pulses): # -> generator<PacketBase>
     deciles = get_decile_durations(pulses)
-    print(deciles)
     if deciles == {}:
         return []
     breaks = find_pulse_groups(pulses, deciles)
@@ -125,7 +121,7 @@ def silver_sensor(packet): # -> None | dictionary
         # "TTTT=Binär in Dez., Dez als HEX, HEX in Dez umwandeln (zB 0010=2Dez, 2Dez=2 Hex) 0010=2 1001=9 0110=6 => 692 HEX = 1682 Dez = >1+6= 7 UND 82 = 782°F"
         if len(bits) == 42:
             fields = [0,2,8,2,2,4,4,4,4,4,8]
-            fields = [x for x in itertools.accumulate(fields)]
+            fields = [x for x in its.accumulate(fields)]
             results = [debinary(bits[x:y]) for (x,y) in zip(fields, fields[1:])]
             # uid is never 0xff, but similar protocols sometimes decode with this field as 0xFF
             if results[1] == 255:
@@ -141,7 +137,7 @@ def silver_sensor(packet): # -> None | dictionary
             return {'uid':results[1], 'temperature': temp, 'humidity': humidity, 'channel':results[3]}#, 'metameta': packet.__dict__}
         elif len(bits) == 36:
             fields = [0] + [4]*9
-            fields = [x for x in itertools.accumulate(fields)]
+            fields = [x for x in its.accumulate(fields)]
             n = [debinary(bits[x:y]) for (x,y) in zip(fields, fields[1:])]
             model = n[0]
             uid = n[1] << 4 | n[2]
@@ -165,23 +161,33 @@ def decode_pulses(pulses): # -> {}
             if (res is not None):
                 res['uid'] = (res['channel']+1*1024)+res['uid']
                 return res
+            else:
+                print('errors', packet.errors)
+                print('deciles', packet.deciles)
     return {}
 
 def try_decode(info, timestamp = 0): # -> {}
-    for smoother_ in [smoother, scismoother]:
-        pulses = get_pulses_from_info(info, smoother_)
+    if scipy is not None:
+        filters = [brickwall, lowpass]
+    else:
+        filters = [brickwall]
+    for filter_func in filters:
+        pulses = get_pulses_from_info(info, filter_func)
         decoded = decode_pulses(pulses)
         if decoded != {}:
             return decoded
     return {}
 
 async def main():
-    import phase1
     connection = await phase1.get_connection()
+    datastore = tsd.TimeSeriesDatastore()
     while True:
-        timestamp = await connection.brpop(['eof_timestamps'], 360)
-        timestamp = timestamp.value
-        info = await connection.get(timestamp)
+        try:
+            timestamp = await connection.brpop(['eof_timestamps'], 360)
+            timestamp = timestamp.value
+            info = await connection.get(timestamp)
+        except:
+            info = {}
         if info in [{}, None]:
             decoded = {}
         else:
