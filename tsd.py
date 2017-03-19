@@ -10,9 +10,7 @@ class TimeSeriesDatastore(object):
     def __init__(self, db='sproutwave_v0.db'):
         self.conn = sql.connect('sproutwave_v0.db')
         init_readings = 'CREATE TABLE IF NOT EXISTS readings (Timestamp REAL, Sensor INT, Units INT, Value REAL)'
-        init_errors = 'CREATE TABLE IF NOT EXISTS errors (Timestamp REAL, Raw Blob)'
         self.conn.execute(init_readings)
-        self.conn.execute(init_errors)
         create_index = 'CREATE INDEX IF NOT EXISTS time ON readings (Timestamp ASC)'
         self.conn.execute(create_index)
         self.conn.commit()
@@ -40,12 +38,6 @@ class TimeSeriesDatastore(object):
         for sample in samples:
            sample['units'] = unit_list[sample['units']]
         return samples
-
-
-    def add_error(self, timestamp, raw):
-        inserter = "INSERT INTO errors VALUES(?, ?)"
-        self.cursor.executemany(inserter, [(timestamp, raw)])
-        return self.conn.commit()
 
     def add_measurement(self, timestamp, sensor_uid, units, value):
         if units.lower() in unit_list:
