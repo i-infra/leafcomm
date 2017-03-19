@@ -28,15 +28,10 @@ async def main():
     sdr = rtlsdraio.RtlSdrAio()
 
     print('Configuring SDR...')
-    # multiple of 2, 5 - should have neon butterflies for at least these
-    # lowest "sane" sample rate
     sdr.rs = 256000
     # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
-    # offset center frequency for 433.92 ism
     sdr.fc = 433.8e6
-    # arbitrary small number, adjust based on antenna and range
     sdr.gain = 3
-    #sdr.set_manual_gain_enabled(False)
     print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
     print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
     # TODO: if you don't set gain, and query this parameter, python segfaults..
@@ -76,42 +71,36 @@ async def process_samples(sdr):
     (total, acc, count) = (0, 0, 1)
     last = time.time()
     loud = False
-    complex_samples = np.empty(samp_size, 'complex64')
-    float_samples = np.empty(samp_size, dtype='float32')
-    block = np.empty(samp_size*max_blocks, 'complex64')
-    block = []#np.empty(samp_size*max_blocks, 'complex64')
-    absoluter = ne3.NumExpr('float_samples = abs(complex_samples)')
+    block = []
     async for byte_samples in sdr.stream(block_size, format='bytes'):
+        complex_samples = np.empty(samp_size, 'complex64')
         packed_bytes_to_iq(byte_samples, complex_samples)
+        #float_samples = np.empty(samp_size, 'float32')
         #ne3.evaluate('float_samples = abs(complex_samples)')
-        absoluter.run(float_samples = float_samples, complex_samples = complex_samples)
-        #float_samples = np.abs(complex_samples)
-        pwr = np.sum(float_samples)
+        pwr = np.sum(np.abs(complex_samples))
         if total == 0:
             total = pwr
         if pwr > (total / count):
             total += (pwr - (total/count))/100.
             print(time.time()-last, acc, pwr, total/count)
             loud = True
-        if loud == True:
+            block.append(np.copy(complex_samples))
             acc += 1
-            if acc < max_blocks:
-                #block[samp_size*acc:samp_size*(acc+1)] = complex_samples
-                block.append(np.copy(complex_samples))
-        if pwr < (total / count):
+        else:
             total += pwr
             count += 1
             if loud:
                 timestamp = time.time()
+                block.append(np.copy(complex_samples))
                 #size, dtype, compressed = beepshrink.compress(block[0:(acc+1)*samp_size])
                 size, dtype, compressed = beepshrink.compress(np.concatenate(block))
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                 await push_sample(timestamp, info)
-                #block.fill(0+0j)
+                print(time.time()-last, acc, pwr, total/count, count)
                 block = []
-                print(time.time()-last, acc, pwr, total/count)
                 loud = False
                 acc = 0
+                gc.collect()
         last = time.time()
 
 
