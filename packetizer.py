@@ -5,7 +5,6 @@ import numexpr3 as ne3
 import bottleneck as bn
 import itertools as its
 import typing
-import beepshrink
 
 import tsd
 import phase1
@@ -38,7 +37,7 @@ except:
     scipy = None
 
 def get_pulses_from_info(info, smoother=brickwall):
-    beep_samples = beepshrink.decompress(**info)
+    beep_samples = phase1.decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype='float32')
     ne3.evaluate('beep_absolute = abs(beep_samples)')

@@ -2,14 +2,13 @@ import asyncio
 import time
 import gc
 import cbor
+import blosc
 import numpy as np
 
 import asyncio_redis
 from asyncio_redis.encoders import BaseEncoder
 
 import numexpr3 as ne3
-
-import beepshrink
 
 class CborEncoder(BaseEncoder):
     native_type = object
@@ -18,6 +17,12 @@ class CborEncoder(BaseEncoder):
     def decode_to_native(self, data):
         return cbor.loads(data)
 
+compress = lambda in_: (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
+
+def decompress(size, dtype, data):
+    out = np.empty(size, dtype)
+    blosc.decompress_ptr(data, out.__array_interface__['data'][0])
+    return out
 
 async def get_connection():
     redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
@@ -93,7 +98,7 @@ async def process_samples(sdr):
                 timestamp = time.time()
                 block.append(np.copy(complex_samples))
                 #size, dtype, compressed = beepshrink.compress(block[0:(acc+1)*samp_size])
-                size, dtype, compressed = beepshrink.compress(np.concatenate(block))
+                size, dtype, compressed = compress(np.concatenate(block))
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                 await push_sample(timestamp, info)
                 print(time.time()-last, acc, pwr, total/count, count)
