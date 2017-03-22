@@ -64,13 +64,13 @@ def packed_bytes_to_iq(samples, out = None):
     if out is None:
         return iq
 
-async def push_sample(timestamp, info):
-    connection = await get_connection()
+async def push_sample(connection, timestamp, info):
     await connection.set(timestamp, info)
     await connection.lpush('eof_timestamps', [timestamp])
     await connection.expireat(timestamp, int(timestamp+600))
 
 async def process_samples(sdr):
+    connection = await get_connection()
     (block_size, max_blocks) = (1024*32, 40)
     samp_size = block_size // 2
     (total, acc, count) = (0, 0, 1)
@@ -100,7 +100,7 @@ async def process_samples(sdr):
                 #size, dtype, compressed = beepshrink.compress(block[0:(acc+1)*samp_size])
                 size, dtype, compressed = compress(np.concatenate(block))
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                await push_sample(timestamp, info)
+                await push_sample(connection, timestamp, info)
                 print(time.time()-last, acc, pwr, total/count, count)
                 block = []
                 loud = False
