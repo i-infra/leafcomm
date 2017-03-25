@@ -4,14 +4,15 @@ import numpy as np
 import numexpr3 as ne3
 import bottleneck as bn
 import itertools as its
-import typing
 
 import tsd
 
+import typing
+
+import multiprocessing
 import asyncio
 import time
 import gc
-import multiprocessing
 
 import cbor
 import blosc
@@ -45,8 +46,9 @@ try:
         return y
     lowpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'low', order=4)
     #bandpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'bandpass', order=4)
+    filters = [brickwall, lowpass]
 except:
-    scipy = None
+    filters = [brickwall]
 
 
 class CborEncoder(BaseEncoder):
@@ -58,35 +60,10 @@ class CborEncoder(BaseEncoder):
 
 compress = lambda in_: (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
 
-def decompress(size, dtype, data):
+def decompress(size, dtype, data): # -> bytes
     out = np.empty(size, dtype)
     blosc.decompress_ptr(data, out.__array_interface__['data'][0])
     return out
-
-async def get_connection():
-    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
-    return redis_connection
-
-async def phase1_main():
-    from rtlsdr import rtlsdraio
-    sdr = rtlsdraio.RtlSdrAio()
-
-    print('Configuring SDR...')
-    sdr.rs = 256000
-    # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
-    sdr.fc = 433.8e6
-    sdr.gain = 3
-    print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
-    print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
-    # TODO: if you don't set gain, and query this parameter, python segfaults..
-    print('  gain: %s dB' % sdr.gain)
-
-    print('Streaming bytes...')
-    await process_samples(sdr)#, redis_connection)
-    await sdr.stop()
-    print('Done')
-    sdr.close()
-
 
 
 def packed_bytes_to_iq(samples, out = None):
@@ -107,7 +84,7 @@ async def push_sample(connection, timestamp, info):
     await connection.expireat(timestamp, int(timestamp+600))
 
 async def process_samples(sdr):
-    connection = await get_connection()
+    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
     (block_size, max_blocks) = (1024*32, 40)
     samp_size = block_size // 2
     (total, acc, count) = (0, 0, 1)
@@ -133,7 +110,6 @@ async def process_samples(sdr):
             if loud:
                 timestamp = time.time()
                 block.append(np.copy(complex_samples))
-                #size, dtype, compressed = beepshrink.compress(block[0:(acc+1)*samp_size])
                 size, dtype, compressed = compress(np.concatenate(block))
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                 await push_sample(connection, timestamp, info)
@@ -155,7 +131,6 @@ def get_pulses_from_info(info, smoother=brickwall):
     beep_binary = np.empty(shape, dtype=bool)
     ne3.evaluate('beep_binary = beep_smoothed > threshold')
     pulses = rle(beep_binary)
-    #pulses = rerle([x for x in rle(beep_binary) if x[0] > 2])
     return np.array(pulses)
 
 def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
@@ -204,7 +179,6 @@ def demodulator(pulses): # -> generator<PacketBase>
         packet = pulses[x+1:y]
         pb = []
         errors = []
-        # iterate over packet pulses
         for chip in packet:
             valid = False
             for v in deciles.keys():
@@ -219,7 +193,7 @@ def demodulator(pulses): # -> generator<PacketBase>
             result = PacketBase(pb, errors, deciles, pulses[x:y])
             yield result
 
-def silver_sensor(packet): # -> None | dictionary
+def silver_sensor(packet): # -> {} 
     # TODO: CRC
     # TODO: battery OK
     # TODO: handle preamble pulse
@@ -231,9 +205,8 @@ def silver_sensor(packet): # -> None | dictionary
             fields = [0,2,8,2,2,4,4,4,4,4,8]
             fields = [x for x in its.accumulate(fields)]
             results = [debinary(bits[x:y]) for (x,y) in zip(fields, fields[1:])]
-            # uid is never 0xff, but similar protocols sometimes decode with this field as 0xFF
             if results[1] == 255:
-                return None
+                return {}
             temp = (16**2*results[6]+16*results[5]+results[4])
             humidity = (16*results[8]+results[7])
             if temp > 1000:
@@ -258,7 +231,7 @@ def silver_sensor(packet): # -> None | dictionary
             rh = n[7]*10 + n[8]
             if n[0] == 5:
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
-    return None
+    return {} 
 
 
 def decode_pulses(pulses): # -> {}
@@ -266,7 +239,7 @@ def decode_pulses(pulses): # -> {}
         for packet in demodulator(pulses):
             print(printer(packet.packet))
             res = silver_sensor(packet)
-            if (res is not None):
+            if 'uid' in res.keys():
                 res['uid'] = (res['channel']+1*1024)+res['uid']
                 return res
             else:
@@ -275,10 +248,6 @@ def decode_pulses(pulses): # -> {}
     return {}
 
 def try_decode(info, timestamp = 0): # -> {}
-    if scipy is not None:
-        filters = [brickwall, lowpass]
-    else:
-        filters = [brickwall]
     for filter_func in filters:
         pulses = get_pulses_from_info(info, filter_func)
         decoded = decode_pulses(pulses)
@@ -286,8 +255,28 @@ def try_decode(info, timestamp = 0): # -> {}
             return decoded
     return {}
 
+async def phase1_main():
+    from rtlsdr import rtlsdraio
+    sdr = rtlsdraio.RtlSdrAio()
+
+    print('Configuring SDR...')
+    sdr.rs = 256000
+    # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
+    sdr.fc = 433.81e6
+    sdr.gain = 3
+    print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
+    print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
+    # TODO: if you don't set gain, and query this parameter, python segfaults..
+    print('  gain: %s dB' % sdr.gain)
+
+    print('Streaming bytes...')
+    await process_samples(sdr)
+    await sdr.stop()
+    print('Done')
+    sdr.close()
+
 async def packetizer_main():
-    connection = await get_connection()
+    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
     datastore = tsd.TimeSeriesDatastore()
     print('connected to datastore')
     while True:
@@ -318,5 +307,5 @@ def spawner(future_yielder):
 
 if __name__ == "__main__":
     spawner(phase1_main)
-    spawner(packetizer_main)
+    asyncio.ensure_future(packetizer_main())
     asyncio.get_event_loop().run_forever()
