@@ -1,6 +1,7 @@
 import sys
 sys.path.append('./')
 import asyncio
+import asyncio_redis
 import phase1
 import cbor
 import base64
@@ -10,7 +11,7 @@ async def main():
         reader, writer = await asyncio.open_connection(sys.argv[1], int(sys.argv[2]))
     except:
         writer = None
-    conn = await phase1.get_connection()
+    conn = await asyncio_redis.Connection.create('localhost', 6379, encoder=phase1.CborEncoder())
     failed = await conn.smembers_asset('nontrivial_timestamps')
     byte_count = 0
     def forwarder(info):

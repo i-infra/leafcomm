@@ -2,6 +2,7 @@ import sys
 sys.path.append('./') 
 
 import asyncio
+import asyncio_redis
 import phase1
 import cbor
 import base64
@@ -13,7 +14,7 @@ import base64
 async def main():
     for arg in sys.argv[1::]:
         key = cbor.loads(base64.b64decode(arg))
-        conn = await phase1.get_connection()
+        conn = await asyncio_redis.Connection.create('localhost', 6379, encoder=phase1.CborEncoder())
         info = await conn.get(key)
         f = open(str(key)+'.beep', 'wb')
         f.write(cbor.dumps(info))

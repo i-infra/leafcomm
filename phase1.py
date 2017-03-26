@@ -13,6 +13,7 @@ import multiprocessing
 import asyncio
 import time
 import gc
+import random
 
 import cbor
 import blosc
@@ -94,9 +95,10 @@ async def process_samples(sdr):
     async for byte_samples in sdr.stream(block_size, format='bytes'):
         complex_samples = np.empty(samp_size, 'complex64')
         packed_bytes_to_iq(byte_samples, complex_samples)
-        #float_samples = np.empty(samp_size, 'float32')
-        #ne3.evaluate('float_samples = abs(complex_samples)')
         pwr = np.sum(np.abs(complex_samples))
+        if (count % 10000) == 0:
+            sdr.set_center_freq(random.randrange(433.8e6, 434e6,step=10000))
+            print("center frequency:", sdr.get_center_freq())
         if total == 0:
             total = pwr
         if pwr > (total / count):
@@ -262,7 +264,7 @@ async def phase1_main():
     print('Configuring SDR...')
     sdr.rs = 256000
     # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
-    sdr.fc = 433.81e6
+    sdr.fc = 433.82e6
     sdr.gain = 3
     print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
     print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
