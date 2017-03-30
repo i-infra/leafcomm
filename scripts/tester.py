@@ -10,15 +10,7 @@ for fname in sys.argv[1::]:
     f = open(fname, 'rb').read()
     start = time.time()
     info = cbor.loads(f)
-
-    pulses = phase1.get_pulses_from_info(info)
-    print(pulses)
-    packets = phase1.demodulator(pulses)
-
-    for packet in packets:
-        print(phase1.printer(packet.packet))
-        print(packet.errors, packet.deciles)
-        if packet.errors == []:
-            break
+    start = time.time()
+    decoded = phase1.try_decode(info)
     end = time.time()
-    print(end-start)
+    print(end-start, decoded)

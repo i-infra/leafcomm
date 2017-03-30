@@ -1,28 +1,56 @@
+from statistics import mode, mean, StatisticsError
+
+import numpy as np
+import numexpr3 as ne3
+import bottleneck as bn
+import itertools as its
+
+import tsd
+
+import typing
+
+import multiprocessing
 import asyncio
 import time
 import gc
-import itertools
-import multiprocessing
-import typing
+import random
+
 import cbor
 import blosc
 
-import numpy as np
-
-import numexpr3 as ne3
-import bottleneck as bn
-
+import asyncio_redis
 from asyncio_redis.encoders import BaseEncoder
-from statistics import mode, mean, StatisticsError
 
-ne3.set_num_threads(2)
+complex_to_stereo = lambda a: np.dstack((a.real, a.imag))[0]
+stereo_to_complex = lambda a: a[0] + a[1]*1j
+rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in its.groupby(xs, lambda x: x[1])]
+rle = lambda xs: [(len(list(gp)), x) for x, gp in its.groupby(xs)]
+rld = lambda xs: its.chain.from_iterable(its.repeat(x, n) for n, x in xs)
 
-compress = lambda in_: (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
+(L,H,E) = (0,1,2)
 
-def decompress(size, dtype, data):
-    out = np.empty(size, dtype)
-    blosc.decompress_ptr(data, out.__array_interface__['data'][0])
-    return out
+printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
+debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
+brickwall = lambda xs: bn.move_mean(xs, 32, 1)
+
+try:
+    import scipy
+    from scipy.signal import butter, lfilter, freqz
+    def butter_filter(data, cutoff, fs, btype='low', order=5):
+        normalized_cutoff = cutoff / (0.5*fs)
+        if btype == 'bandpass':
+            normalized_cutoff = [normalized_cutoff // 10, normalized_cutoff]
+        b, a = butter(order, normalized_cutoff, btype=btype, analog=False)
+        b = b.astype('float32')
+        a = a.astype('float32')
+        y = lfilter(b, a, data)
+        return y
+    lowpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'low', order=4)
+    #bandpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'bandpass', order=4)
+    filters = [brickwall, lowpass]
+except:
+    filters = [brickwall]
+
 
 class CborEncoder(BaseEncoder):
     native_type = object
@@ -31,76 +59,77 @@ class CborEncoder(BaseEncoder):
     def decode_to_native(self, data):
         return cbor.loads(data)
 
-async def get_connection():
-    import asyncio_redis
-    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
-    return redis_connection
+compress = lambda in_: (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
 
-complex_to_stereo = lambda a: np.dstack((a.real, a.imag))[0]
-stereo_to_complex = lambda a: a[0] + a[1]*1j
-rle = lambda xs: [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
-rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
+def decompress(size, dtype, data): # -> bytes
+    out = np.empty(size, dtype)
+    blosc.decompress_ptr(data, out.__array_interface__['data'][0])
+    return out
 
-(L,H,E) = (0,1,2)
-
-printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
-debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
-smoother = lambda xs: bn.move_mean(xs, 32, 1)
-
-def packed_bytes_to_iq(samples):
+def packed_bytes_to_iq(samples, out = None):
+    if out is None:
+        iq = np.empty(len(samples)//2, 'complex64')
+    else:
+        iq = out
     bytes_np = np.ctypeslib.as_array(samples)
-    iq = np.empty(len(samples)//2, 'complex64')
     iq.real, iq.imag = bytes_np[::2], bytes_np[1::2]
     iq /= (255/2)
     iq -= (1 + 1j)
-    return iq
+    if out is None:
+        return iq
 
-async def process_samples(sdr, connection):
-    block_size = 1024*32
-    total = 0
-    count = 1
-    relevant_blocks = []
+async def process_samples(sdr):
+    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
+    (block_size, max_blocks) = (1024*32, 40)
+    samp_size = block_size // 2
+    (total, acc, count) = (0, 0, 1)
+    last = time.time()
     loud = False
-    float_samples = np.empty(block_size//2, dtype='float32')
+    block = []
     async for byte_samples in sdr.stream(block_size, format='bytes'):
-        complex_samples = packed_bytes_to_iq(byte_samples)
-        abs_expr = ne3.NumExpr('float_samples = abs(complex_samples)')
-        abs_expr.run(check_arrays = False)
-        pwr = np.sum(float_samples)
+        complex_samples = np.empty(samp_size, 'complex64')
+        packed_bytes_to_iq(byte_samples, complex_samples)
+        pwr = np.sum(np.abs(complex_samples))
+        if ((count % 10000) == 0) and (loud is False):
+            sdr.set_center_freq(random.randrange(433.8e6, 434e6,step=10000))
+            print("center frequency:", sdr.get_center_freq())
         if total == 0:
             total = pwr
         if pwr > (total / count):
             total += (pwr - (total/count))/100.
             loud = True
-            relevant_blocks.append(complex_samples)
+            block.append(np.copy(complex_samples))
+            acc += 1
         else:
             total += pwr
             count += 1
-            if loud:
-                relevant_blocks.append(complex_samples)
+            if loud is True:
                 timestamp = time.time()
-                block = np.concatenate(relevant_blocks)
-                size, dtype, compressed = compress(block)
+                block.append(np.copy(complex_samples))
+                size, dtype, compressed = compress(np.concatenate(block))
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                print('phase1', time.time()-timestamp, pwr)
                 await connection.set(timestamp, info)
                 await connection.lpush('eof_timestamps', [timestamp])
                 await connection.expireat(timestamp, int(timestamp+600))
+                print('flushing:', time.time()-last, acc, pwr, total/count, count)
+                block = []
                 loud = False
-                relevant_blocks = []
-                print('phase1: collected', gc.collect())
+                acc = 0
+                gc.collect()
+        last = time.time()
 
-def get_pulses_from_info(info):
+
+def get_pulses_from_info(info, smoother=brickwall):
     beep_samples = decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype='float32')
     ne3.evaluate('beep_absolute = abs(beep_samples)')
     beep_smoothed = smoother(beep_absolute)
-    threshold = 0.5*bn.nanmax(beep_smoothed)
+    threshold = 1.1*bn.nanmean(beep_smoothed)
     beep_binary = np.empty(shape, dtype=bool)
     ne3.evaluate('beep_binary = beep_smoothed > threshold')
-    pulses = np.array(rle(beep_binary))
-    return pulses
+    pulses = rle(beep_binary)
+    return np.array(pulses)
 
 def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
     values = np.unique(pulses.T[1])
@@ -119,22 +148,20 @@ def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
 
 def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
     cutoff = min(deciles[0][0],deciles[1][0])*9
-    breaks = np.where(pulses.T[0] > cutoff)[0]
+    breaks = np.logical_and(pulses.T[0] > cutoff, pulses.T[1] == L).nonzero()[0]
     break_deltas = np.diff(breaks)
-    if len(break_deltas) < 2:
+    if (len(breaks) > 50) or (len(breaks) < 5):
         return []
     elif len(np.unique(break_deltas[np.where(break_deltas > 3)])) > 3:
         try:
-            d_mode = mode(break_deltas)
-        # if all values different, use mean as mode
+            d_mode = mode([bd for bd in break_deltas if bd > 3])
         except StatisticsError:
             d_mode = round(mean(break_deltas))
-        # determine expected periodicity of packet widths
-        breaks2 = [x*d_mode for x in range(round(max(breaks) // d_mode))]
-        if len(breaks2) < 2:
+        expected_breaks = [x*d_mode for x in range(round(max(breaks) // d_mode))]
+        if len(expected_breaks) < 2:
             return []
-        # discard breaks more than 10% from expected position
-        breaks = [x for x in breaks if True in [abs(x-y) < breaks2[1]//10 for y in breaks2]]
+        tolerance = d_mode//10
+        breaks = [x for (x,bd) in zip(breaks, break_deltas) if (True in [abs(x-y) < tolerance for y in expected_breaks]) or (bd == d_mode) or (bd < 5)]
     return breaks
 
 PacketBase = typing.NamedTuple('PacketBase', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
@@ -150,7 +177,6 @@ def demodulator(pulses): # -> generator<PacketBase>
         packet = pulses[x+1:y]
         pb = []
         errors = []
-        # iterate over packet pulses
         for chip in packet:
             valid = False
             for v in deciles.keys():
@@ -165,7 +191,7 @@ def demodulator(pulses): # -> generator<PacketBase>
             result = PacketBase(pb, errors, deciles, pulses[x:y])
             yield result
 
-def silver_sensor(packet): # -> None | dictionary
+def silver_sensor(packet): # -> {} 
     # TODO: CRC
     # TODO: battery OK
     # TODO: handle preamble pulse
@@ -175,11 +201,10 @@ def silver_sensor(packet): # -> None | dictionary
         # "TTTT=Binär in Dez., Dez als HEX, HEX in Dez umwandeln (zB 0010=2Dez, 2Dez=2 Hex) 0010=2 1001=9 0110=6 => 692 HEX = 1682 Dez = >1+6= 7 UND 82 = 782°F"
         if len(bits) == 42:
             fields = [0,2,8,2,2,4,4,4,4,4,8]
-            fields = [x for x in itertools.accumulate(fields)]
+            fields = [x for x in its.accumulate(fields)]
             results = [debinary(bits[x:y]) for (x,y) in zip(fields, fields[1:])]
-            # uid is never 0xff, but similar protocols sometimes decode with this field as 0xFF
             if results[1] == 255:
-                return None
+                return {}
             temp = (16**2*results[6]+16*results[5]+results[4])
             humidity = (16*results[8]+results[7])
             if temp > 1000:
@@ -191,7 +216,7 @@ def silver_sensor(packet): # -> None | dictionary
             return {'uid':results[1], 'temperature': temp, 'humidity': humidity, 'channel':results[3]}#, 'metameta': packet.__dict__}
         elif len(bits) == 36:
             fields = [0] + [4]*9
-            fields = [x for x in itertools.accumulate(fields)]
+            fields = [x for x in its.accumulate(fields)]
             n = [debinary(bits[x:y]) for (x,y) in zip(fields, fields[1:])]
             model = n[0]
             uid = n[1] << 4 | n[2]
@@ -204,66 +229,70 @@ def silver_sensor(packet): # -> None | dictionary
             rh = n[7]*10 + n[8]
             if n[0] == 5:
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
-    return None
+    return {} 
+
+
+def decode_pulses(pulses): # -> {}
+    if len(pulses) > 10:
+        for packet in demodulator(pulses):
+            res = silver_sensor(packet)
+            if 'uid' in res.keys():
+                print(printer(packet.packet))
+                res['uid'] = (res['channel']+1*1024)+res['uid']
+                return res
+    return {}
+
+def try_decode(info, timestamp = 0): # -> {}
+    for filter_func in filters:
+        pulses = get_pulses_from_info(info, filter_func)
+        decoded = decode_pulses(pulses)
+        if decoded != {}:
+            return decoded
+    return {}
 
 async def phase1_main():
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
     print('Configuring SDR...')
-    # multiple of 2, 5 - should have neon butterflies for at least these
-    # lowest "sane" sample rate
     sdr.rs = 256000
     # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
-    # offset center frequency for 433.92 ism
-    sdr.fc = 434e6
-    # arbitrary small number, adjust based on antenna and range
+    sdr.fc = 433.82e6
     sdr.gain = 3
-    #sdr.set_manual_gain_enabled(False)
     print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
     print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
     # TODO: if you don't set gain, and query this parameter, python segfaults..
     print('  gain: %s dB' % sdr.gain)
 
     print('Streaming bytes...')
-    redis_connection = await get_connection()
-    print('Connected to Redis...')
-    await process_samples(sdr, redis_connection)
+    await process_samples(sdr)
     await sdr.stop()
     print('Done')
     sdr.close()
 
 async def packetizer_main():
-    import tsd
-    connection = await get_connection()
+    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
     datastore = tsd.TimeSeriesDatastore()
-    print('Connected to Datastore...')
+    print('connected to datastore')
     while True:
-        timestamp = await connection.brpop(['eof_timestamps'], 360)
-        timestamp = timestamp.value
-        info = await connection.get(timestamp)
+        try:
+            timestamp = await connection.brpop(['eof_timestamps'], 360)
+            timestamp = timestamp.value
+            info = await connection.get(timestamp)
+        except:
+            info = {}
         if info in [{}, None]:
-            pulses = []
+            decoded = {}
         else:
-            pulses = get_pulses_from_info(info)
-        decoded = False
-        if len(pulses) > 10:
-            for packet in demodulator(pulses):
-                print(printer(packet.packet))
-                res = silver_sensor(packet)
-                if (res is not None) and decoded is False:
-                    uid = (res['channel']+1*1024)+res['uid']
-                    datastore.add_measurement(timestamp, uid, 'degc', res['temperature'])
-                    datastore.add_measurement(timestamp, uid, 'rh', res['humidity'])
-                    print('packetizer', time.time()-timestamp, res)
-                    decoded = True
-                    break
-        if (len(pulses) != 0) and (decoded == False):
+            decoded = try_decode(info, timestamp)
+        if decoded == {}:
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
+            datastore.add_measurement(timestamp, decoded['uid'], 'degc', decoded['temperature'])
+            datastore.add_measurement(timestamp, decoded['uid'], 'rh', decoded['humidity'])
+            await connection.sadd('trivial_timestamps', [timestamp])
             await connection.delete([timestamp])
-        print('packetizer: collected', gc.collect())
 
 def spawner(future_yielder):
     def loopwrapper(main):
@@ -274,5 +303,6 @@ def spawner(future_yielder):
 
 if __name__ == "__main__":
     spawner(phase1_main)
-    spawner(packetizer_main)
+    asyncio.ensure_future(packetizer_main())
+    #asyncio.ensure_future(phase1_main())
     asyncio.get_event_loop().run_forever()
