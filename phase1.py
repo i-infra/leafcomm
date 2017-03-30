@@ -66,7 +66,6 @@ def decompress(size, dtype, data): # -> bytes
     blosc.decompress_ptr(data, out.__array_interface__['data'][0])
     return out
 
-
 def packed_bytes_to_iq(samples, out = None):
     if out is None:
         iq = np.empty(len(samples)//2, 'complex64')
@@ -78,11 +77,6 @@ def packed_bytes_to_iq(samples, out = None):
     iq -= (1 + 1j)
     if out is None:
         return iq
-
-async def push_sample(connection, timestamp, info):
-    await connection.set(timestamp, info)
-    await connection.lpush('eof_timestamps', [timestamp])
-    await connection.expireat(timestamp, int(timestamp+600))
 
 async def process_samples(sdr):
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
@@ -96,7 +90,7 @@ async def process_samples(sdr):
         complex_samples = np.empty(samp_size, 'complex64')
         packed_bytes_to_iq(byte_samples, complex_samples)
         pwr = np.sum(np.abs(complex_samples))
-        if (count % 10000) == 0:
+        if ((count % 10000) == 0) and (loud is False):
             sdr.set_center_freq(random.randrange(433.8e6, 434e6,step=10000))
             print("center frequency:", sdr.get_center_freq())
         if total == 0:
@@ -109,13 +103,15 @@ async def process_samples(sdr):
         else:
             total += pwr
             count += 1
-            if loud:
+            if loud is True:
                 timestamp = time.time()
                 block.append(np.copy(complex_samples))
                 size, dtype, compressed = compress(np.concatenate(block))
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                await push_sample(connection, timestamp, info)
-                print(time.time()-last, acc, pwr, total/count, count)
+                await connection.set(timestamp, info)
+                await connection.lpush('eof_timestamps', [timestamp])
+                await connection.expireat(timestamp, int(timestamp+600))
+                print('flushing:', time.time()-last, acc, pwr, total/count, count)
                 block = []
                 loud = False
                 acc = 0
@@ -239,14 +235,11 @@ def silver_sensor(packet): # -> {}
 def decode_pulses(pulses): # -> {}
     if len(pulses) > 10:
         for packet in demodulator(pulses):
-            print(printer(packet.packet))
             res = silver_sensor(packet)
             if 'uid' in res.keys():
+                print(printer(packet.packet))
                 res['uid'] = (res['channel']+1*1024)+res['uid']
                 return res
-            else:
-                print('errors', packet.errors)
-                print('deciles', packet.deciles)
     return {}
 
 def try_decode(info, timestamp = 0): # -> {}
@@ -298,6 +291,7 @@ async def packetizer_main():
         else:
             datastore.add_measurement(timestamp, decoded['uid'], 'degc', decoded['temperature'])
             datastore.add_measurement(timestamp, decoded['uid'], 'rh', decoded['humidity'])
+            await connection.sadd('trivial_timestamps', [timestamp])
             await connection.delete([timestamp])
 
 def spawner(future_yielder):
@@ -310,4 +304,5 @@ def spawner(future_yielder):
 if __name__ == "__main__":
     spawner(phase1_main)
     asyncio.ensure_future(packetizer_main())
+    #asyncio.ensure_future(phase1_main())
     asyncio.get_event_loop().run_forever()
