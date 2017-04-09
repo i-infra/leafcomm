@@ -36,17 +36,17 @@ brickwall = lambda xs: bn.move_mean(xs, 32, 1)
 try:
     import scipy
     from scipy.signal import butter, lfilter, freqz
-    def butter_filter(data, cutoff, fs, btype='low', order=5):
+    def butter_filter(data, cutoff, fs, btype = 'low', order = 5):
         normalized_cutoff = cutoff / (0.5*fs)
         if btype == 'bandpass':
             normalized_cutoff = [normalized_cutoff // 10, normalized_cutoff]
-        b, a = butter(order, normalized_cutoff, btype=btype, analog=False)
+        b, a = butter(order, normalized_cutoff, btype = btype, analog = False)
         b = b.astype('float32')
         a = a.astype('float32')
         y = lfilter(b, a, data)
         return y
-    lowpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'low', order=4)
-    #bandpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'bandpass', order=4)
+    lowpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'low', order = 4)
+    #bandpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'bandpass', order = 4)
     filters = [brickwall, lowpass]
 except:
     filters = [brickwall]
@@ -59,7 +59,7 @@ class CborEncoder(BaseEncoder):
     def decode_to_native(self, data):
         return cbor.loads(data)
 
-compress = lambda in_: (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
+compress = lambda in_: (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel = 1, shuffle = blosc.BITSHUFFLE, cname = 'lz4'))
 
 def decompress(size, dtype, data): # -> bytes
     out = np.empty(size, dtype)
@@ -79,19 +79,19 @@ def packed_bytes_to_iq(samples, out = None):
         return iq
 
 async def process_samples(sdr):
-    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
+    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     (block_size, max_blocks) = (1024*32, 40)
     samp_size = block_size // 2
     (total, acc, count) = (0, 0, 1)
     last = time.time()
     loud = False
     block = []
-    async for byte_samples in sdr.stream(block_size, format='bytes'):
+    async for byte_samples in sdr.stream(block_size, format = 'bytes'):
         complex_samples = np.empty(samp_size, 'complex64')
         packed_bytes_to_iq(byte_samples, complex_samples)
         pwr = np.sum(np.abs(complex_samples))
-        if ((count % 10000) == 0) and (loud is False):
-            sdr.set_center_freq(random.randrange(433.8e6, 434e6,step=10000))
+        if ((count % 1000) == 1) and (loud is False):
+            sdr.set_center_freq(random.randrange(433.8e6, 434e6, step = 10000))
             print("center frequency:", sdr.get_center_freq())
         if total == 0:
             total = pwr
@@ -119,10 +119,10 @@ async def process_samples(sdr):
         last = time.time()
 
 
-def get_pulses_from_info(info, smoother=brickwall):
+def get_pulses_from_info(info, smoother = brickwall):
     beep_samples = decompress(**info)
     shape = beep_samples.shape
-    beep_absolute = np.empty(shape, dtype='float32')
+    beep_absolute = np.empty(shape, dtype = 'float32')
     ne3.evaluate('beep_absolute = abs(beep_samples)')
     beep_smoothed = smoother(beep_absolute)
     threshold = 1.1*bn.nanmean(beep_smoothed)
@@ -161,7 +161,8 @@ def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
         if len(expected_breaks) < 2:
             return []
         tolerance = d_mode//10
-        breaks = [x for (x,bd) in zip(breaks, break_deltas) if (True in [abs(x-y) < tolerance for y in expected_breaks]) or (bd == d_mode) or (bd < 5)]
+        breaks = [x for (x,bd) in zip(breaks, break_deltas)
+            if (True in [abs(x-y) < tolerance for y in expected_breaks]) or (bd == d_mode) or (bd < 5)]
     return breaks
 
 PacketBase = typing.NamedTuple('PacketBase', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
@@ -191,7 +192,7 @@ def demodulator(pulses): # -> generator<PacketBase>
             result = PacketBase(pb, errors, deciles, pulses[x:y])
             yield result
 
-def silver_sensor(packet): # -> {} 
+def silver_sensor(packet): # -> {}
     # TODO: CRC
     # TODO: battery OK
     # TODO: handle preamble pulse
@@ -229,7 +230,7 @@ def silver_sensor(packet): # -> {}
             rh = n[7]*10 + n[8]
             if n[0] == 5:
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
-    return {} 
+    return {}
 
 
 def decode_pulses(pulses): # -> {}
@@ -271,7 +272,7 @@ async def phase1_main():
     sdr.close()
 
 async def packetizer_main():
-    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder=CborEncoder())
+    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     datastore = tsd.TimeSeriesDatastore()
     print('connected to datastore')
     while True:
@@ -299,7 +300,7 @@ def spawner(future_yielder):
         loop = asyncio.get_event_loop()
         asyncio.ensure_future(main())
         loop.run_forever()
-    multiprocessing.Process(target=loopwrapper, args=(future_yielder,)).start()
+    multiprocessing.Process(target = loopwrapper, args = (future_yielder,)).start()
 
 if __name__ == "__main__":
     spawner(phase1_main)
