@@ -1,14 +1,10 @@
-from statistics import mode, mean, StatisticsError
-
 import numpy as np
 import numexpr3 as ne3
 import bottleneck as bn
 import itertools as its
 
-import tsd
-
+import statistics
 import typing
-
 import multiprocessing
 import asyncio
 import time
@@ -17,13 +13,16 @@ import random
 
 import cbor
 import blosc
-
 import asyncio_redis
+
 from asyncio_redis.encoders import BaseEncoder
+
+import tsd
 
 FilterFunc = typing.Callable[[np.ndarray], np.ndarray]
 Info = typing.Dict
 Deciles = typing.Dict[int,typing.Tuple[int, int]]
+Packet = typing.NamedTuple('Packet', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
 
 complex_to_stereo = lambda a: np.dstack((a.real, a.imag))[0]
 stereo_to_complex = lambda a: a[0] + a[1]*1j
@@ -135,7 +134,7 @@ def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.nda
     pulses = rle(beep_binary)
     return np.array(pulses)
 
-def get_decile_durations(pulses: np.ndarray) -> Deciles: 
+def get_decile_durations(pulses: np.ndarray) -> Deciles:
     values = np.unique(pulses.T[1])
     deciles = {}
     if len(pulses) < 10:
@@ -150,7 +149,7 @@ def get_decile_durations(pulses: np.ndarray) -> Deciles:
         deciles[value] = (short_decile, long_decile)
     return deciles
 
-def find_pulse_groups(pulses: np.ndarray, deciles: Deciles) -> typing.List[int]: 
+def find_pulse_groups(pulses: np.ndarray, deciles: Deciles) -> typing.List[int]:
     cutoff = min(deciles[0][0],deciles[1][0])*9
     breaks = np.logical_and(pulses.T[0] > cutoff, pulses.T[1] == L).nonzero()[0]
     break_deltas = np.diff(breaks)
@@ -158,9 +157,9 @@ def find_pulse_groups(pulses: np.ndarray, deciles: Deciles) -> typing.List[int]:
         return []
     elif len(np.unique(break_deltas[np.where(break_deltas > 3)])) > 3:
         try:
-            d_mode = mode([bd for bd in break_deltas if bd > 3])
-        except StatisticsError:
-            d_mode = round(mean(break_deltas))
+            d_mode = statistics.mode([bd for bd in break_deltas if bd > 3])
+        except statistics.StatisticsError:
+            d_mode = round(statistics.mean(break_deltas))
         expected_breaks = [x*d_mode for x in range(round(max(breaks) // d_mode))]
         if len(expected_breaks) < 2:
             return []
@@ -169,9 +168,7 @@ def find_pulse_groups(pulses: np.ndarray, deciles: Deciles) -> typing.List[int]:
             if (True in [abs(x-y) < tolerance for y in expected_breaks]) or (bd == d_mode) or (bd < 5)]
     return breaks
 
-PacketBase = typing.NamedTuple('PacketBase', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
-
-def demodulator(pulses: np.ndarray) -> typing.Iterable[PacketBase]:
+def demodulator(pulses: np.ndarray) -> typing.Iterable[Packet]:
     deciles = get_decile_durations(pulses)
     if deciles == {}:
         return []
@@ -193,10 +190,10 @@ def demodulator(pulses: np.ndarray) -> typing.Iterable[PacketBase]:
                 errors += [chip]
                 pb.append(E)
         if len(pb) > 4:
-            result = PacketBase(pb, errors, deciles, pulses[x:y])
+            result = Packet(pb, errors, deciles, pulses[x:y])
             yield result
 
-def silver_sensor(packet: PacketBase) -> typing.Dict:
+def silver_sensor(packet: Packet) -> typing.Dict:
     # TODO: CRC
     # TODO: battery OK
     # TODO: handle preamble pulse
@@ -256,16 +253,13 @@ def try_decode(info: typing.Dict, timestamp = 0) -> typing.Dict:
     return {}
 
 async def phase1_main() -> typing.Awaitable[None]:
+    print('initialising SDR...')
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
-    print('Configuring SDR...')
     sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 3
-    print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
-    print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
-    print('  gain: %s dB' % sdr.gain)
 
-    print('Streaming bytes...')
+    print('streaming bytes...')
     await process_samples(sdr)
     await sdr.stop()
     print('Done')
@@ -307,5 +301,4 @@ def spawner(future_yielder):
 if __name__ == "__main__":
     spawner(phase1_main)
     asyncio.ensure_future(packetizer_main())
-    #asyncio.ensure_future(phase1_main())
     asyncio.get_event_loop().run_forever()

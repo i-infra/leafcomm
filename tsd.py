@@ -7,7 +7,7 @@ unit_list = ['none', 'degc', 'rh', 'kpa', 'watt']
 unit_human = ['None', 'Degrees Celsius', 'Relative Humidity', 'Kilopascals', 'Watts']
 class TimeSeriesDatastore(object):
 
-    def __init__(self, db='sproutwave_v0.db'):
+    def __init__(self, db = 'sproutwave_v0.db'):
         self.conn = sql.connect('sproutwave_v0.db')
         init_readings = 'CREATE TABLE IF NOT EXISTS readings (Timestamp REAL, Sensor INT, Units INT, Value REAL)'
         self.conn.execute(init_readings)
@@ -16,7 +16,7 @@ class TimeSeriesDatastore(object):
         self.conn.commit()
         self.cursor = self.conn.cursor()
 
-    def get_measurement_vectors(self, start=0, stop=-1):
+    def get_measurement_vectors(self, start = 0, stop = -1):
         if stop == -1:
             stop = time.time()
         selector = 'SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s' % (
@@ -27,7 +27,7 @@ class TimeSeriesDatastore(object):
         values['units'] = [unit_list[unit] for unit in values['units']]
         return values
 
-    def get_measurements(self, start=0, stop=-1):
+    def get_measurements(self, start = 0, stop = -1):
         if stop == -1:
             stop = time.time()
         selector = 'SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s' % (
