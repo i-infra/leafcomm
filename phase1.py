@@ -21,6 +21,10 @@ import blosc
 import asyncio_redis
 from asyncio_redis.encoders import BaseEncoder
 
+FilterFunc = typing.Callable[[np.ndarray], np.ndarray]
+Info = typing.Dict
+Deciles = typing.Dict[int,typing.Tuple[int, int]]
+
 complex_to_stereo = lambda a: np.dstack((a.real, a.imag))[0]
 stereo_to_complex = lambda a: a[0] + a[1]*1j
 rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in its.groupby(xs, lambda x: x[1])]
@@ -61,12 +65,12 @@ class CborEncoder(BaseEncoder):
 
 compress = lambda in_: (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel = 1, shuffle = blosc.BITSHUFFLE, cname = 'lz4'))
 
-def decompress(size, dtype, data): # -> bytes
+def decompress(size: int, dtype: str, data: bytes) -> np.ndarray:
     out = np.empty(size, dtype)
     blosc.decompress_ptr(data, out.__array_interface__['data'][0])
     return out
 
-def packed_bytes_to_iq(samples, out = None):
+def packed_bytes_to_iq(samples: bytes, out = None) -> typing.Union[None, np.ndarray]:
     if out is None:
         iq = np.empty(len(samples)//2, 'complex64')
     else:
@@ -78,7 +82,7 @@ def packed_bytes_to_iq(samples, out = None):
     if out is None:
         return iq
 
-async def process_samples(sdr):
+async def process_samples(sdr) -> typing.Awaitable[None]:
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     (block_size, max_blocks) = (1024*32, 40)
     samp_size = block_size // 2
@@ -91,7 +95,7 @@ async def process_samples(sdr):
         packed_bytes_to_iq(byte_samples, complex_samples)
         pwr = np.sum(np.abs(complex_samples))
         if ((count % 1000) == 1) and (loud is False):
-            sdr.set_center_freq(random.randrange(433.8e6, 434e6, step = 10000))
+            sdr.set_center_freq(random.randrange(int(433.8e6), int(434e6), step = 10000))
             print("center frequency:", sdr.get_center_freq())
         if total == 0:
             total = pwr
@@ -117,9 +121,9 @@ async def process_samples(sdr):
                 acc = 0
                 gc.collect()
         last = time.time()
+    return None
 
-
-def get_pulses_from_info(info, smoother = brickwall):
+def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.ndarray:
     beep_samples = decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype = 'float32')
@@ -131,7 +135,7 @@ def get_pulses_from_info(info, smoother = brickwall):
     pulses = rle(beep_binary)
     return np.array(pulses)
 
-def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
+def get_decile_durations(pulses: np.ndarray) -> Deciles: 
     values = np.unique(pulses.T[1])
     deciles = {}
     if len(pulses) < 10:
@@ -146,7 +150,7 @@ def get_decile_durations(pulses): # -> { 1: (100, 150), 0: (200, 250) }
         deciles[value] = (short_decile, long_decile)
     return deciles
 
-def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
+def find_pulse_groups(pulses: np.ndarray, deciles: Deciles) -> typing.List[int]: 
     cutoff = min(deciles[0][0],deciles[1][0])*9
     breaks = np.logical_and(pulses.T[0] > cutoff, pulses.T[1] == L).nonzero()[0]
     break_deltas = np.diff(breaks)
@@ -167,7 +171,7 @@ def find_pulse_groups(pulses, deciles): # -> [0, 1111, 1611, 2111]
 
 PacketBase = typing.NamedTuple('PacketBase', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
 
-def demodulator(pulses): # -> generator<PacketBase>
+def demodulator(pulses: np.ndarray) -> typing.Iterable[PacketBase]:
     deciles = get_decile_durations(pulses)
     if deciles == {}:
         return []
@@ -176,8 +180,8 @@ def demodulator(pulses): # -> generator<PacketBase>
         return []
     for (x,y) in zip(breaks, breaks[1::]):
         packet = pulses[x+1:y]
-        pb = []
-        errors = []
+        pb: typing.List[int] = []
+        errors: typing.List[int] = []
         for chip in packet:
             valid = False
             for v in deciles.keys():
@@ -192,7 +196,7 @@ def demodulator(pulses): # -> generator<PacketBase>
             result = PacketBase(pb, errors, deciles, pulses[x:y])
             yield result
 
-def silver_sensor(packet): # -> {}
+def silver_sensor(packet: PacketBase) -> typing.Dict:
     # TODO: CRC
     # TODO: battery OK
     # TODO: handle preamble pulse
@@ -233,7 +237,7 @@ def silver_sensor(packet): # -> {}
     return {}
 
 
-def decode_pulses(pulses): # -> {}
+def decode_pulses(pulses: np.ndarray) -> typing.Dict:
     if len(pulses) > 10:
         for packet in demodulator(pulses):
             res = silver_sensor(packet)
@@ -243,7 +247,7 @@ def decode_pulses(pulses): # -> {}
                 return res
     return {}
 
-def try_decode(info, timestamp = 0): # -> {}
+def try_decode(info: typing.Dict, timestamp = 0) -> typing.Dict:
     for filter_func in filters:
         pulses = get_pulses_from_info(info, filter_func)
         decoded = decode_pulses(pulses)
@@ -251,18 +255,14 @@ def try_decode(info, timestamp = 0): # -> {}
             return decoded
     return {}
 
-async def phase1_main():
+async def phase1_main() -> typing.Awaitable[None]:
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
     print('Configuring SDR...')
-    sdr.rs = 256000
-    # TODO: dither the tuning frequency to avoid trampling via LF beating or DC spur
-    sdr.fc = 433.82e6
-    sdr.gain = 3
+    sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 3
     print('  sample rate: %0.3f MHz' % (sdr.rs/1e6))
     print('  center frequency %0.6f MHz' % (sdr.fc/1e6))
-    # TODO: if you don't set gain, and query this parameter, python segfaults..
     print('  gain: %s dB' % sdr.gain)
 
     print('Streaming bytes...')
@@ -270,8 +270,9 @@ async def phase1_main():
     await sdr.stop()
     print('Done')
     sdr.close()
+    return None
 
-async def packetizer_main():
+async def packetizer_main() -> typing.Awaitable[None]:
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     datastore = tsd.TimeSeriesDatastore()
     print('connected to datastore')
@@ -283,7 +284,7 @@ async def packetizer_main():
         except:
             info = {}
         if info in [{}, None]:
-            decoded = {}
+            decoded: typing.Dict = {}
         else:
             decoded = try_decode(info, timestamp)
         if decoded == {}:
@@ -294,6 +295,7 @@ async def packetizer_main():
             datastore.add_measurement(timestamp, decoded['uid'], 'rh', decoded['humidity'])
             await connection.sadd('trivial_timestamps', [timestamp])
             await connection.delete([timestamp])
+    return None
 
 def spawner(future_yielder):
     def loopwrapper(main):
