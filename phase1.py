@@ -177,8 +177,8 @@ def demodulator(pulses: np.ndarray) -> typing.Iterable[Packet]:
         return []
     for (x,y) in zip(breaks, breaks[1::]):
         packet = pulses[x+1:y]
-        pb: typing.List[int] = []
-        errors: typing.List[int] = []
+        pb = []
+        errors = []
         for chip in packet:
             valid = False
             for v in deciles.keys():
@@ -278,7 +278,7 @@ async def packetizer_main() -> typing.Awaitable[None]:
         except:
             info = {}
         if info in [{}, None]:
-            decoded: typing.Dict = {}
+            decoded = {}
         else:
             decoded = try_decode(info, timestamp)
         if decoded == {}:
