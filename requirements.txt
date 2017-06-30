@@ -1,10 +1,11 @@
 asyncio-redis
 Bottleneck
-blosc
+#blosc
 cbor
 cffi
 numpy
 pyrtlsdr
-cairocffi
-numexpr3
+#cairocffi
+#numexpr3
+git+https://github.com/pydata/numexpr.git@numexpr-3.0
 Cython
