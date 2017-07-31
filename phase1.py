@@ -176,21 +176,21 @@ def demodulator(pulses: np.ndarray) -> typing.Iterable[Packet]:
     if len(breaks) == 0:
         return []
     for (x,y) in zip(breaks, breaks[1::]):
-        packet = pulses[x+1:y]
-        pb = []
+        pulse_group = pulses[x+1:y]
+        bits = []
         errors = []
-        for chip in packet:
+        for chip in pulse_group:
             valid = False
             for v in deciles.keys():
                 for (i, width) in enumerate(deciles[v]):
                     if (not valid) and (chip[1] == v) and (abs(chip[0] - width) < width // 2):
-                        pb += [v]*(i+1)
+                        bits += [v]*(i+1)
                         valid = True
             if not valid:
                 errors += [chip]
-                pb.append(E)
-        if len(pb) > 4:
-            result = Packet(pb, errors, deciles, pulses[x:y])
+                bits.append(E)
+        if len(bits) > 4:
+            result = Packet(bits, errors, deciles, pulses[x:y])
             yield result
 
 def silver_sensor(packet: Packet) -> typing.Dict:
