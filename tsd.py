@@ -5,6 +5,12 @@ import time
 
 unit_list = ['none', 'degc', 'rh', 'kpa', 'watt']
 unit_human = ['None', 'Degrees Celsius', 'Relative Humidity', 'Kilopascals', 'Watts']
+
+# kludge to pull enum into local namespace
+for i, unit in enumerate(unit_list):
+    exec(unit+'='+str(i))
+del i, unit
+
 class TimeSeriesDatastore(object):
 
     def __init__(self, db = 'sproutwave_v0.db'):
@@ -39,20 +45,22 @@ class TimeSeriesDatastore(object):
            sample['units'] = unit_list[sample['units']]
         return samples
 
-    def add_measurement(self, timestamp, sensor_uid, units, value):
-        if units.lower() in unit_list:
-            units = unit_list.index(units.lower())
-        elif units == None:
-            units = 0
+    def add_measurement(self, timestamp, sensor_uid, units, value, raw = False):
+        if raw == True:
+            unit_tag = units
         else:
-            units = -1
+            if units.lower() in unit_list:
+                unit_tag = unit_list.index(units.lower())
+            elif units == None:
+                unit_tag = 0
+            else:
+                unit_tag = -1
         if type(value) != float:
             value = float(value)
         if type(sensor_uid) != int:
             sensor_id = int(sensor_id)
         inserter = "INSERT INTO readings VALUES(?, ?, ?, ?)"
-        data = (timestamp, sensor_uid, units, value)
-        print(data)
+        data = (timestamp, sensor_uid, unit_tag, value)
         self.cursor.executemany(inserter, [data])
         return self.conn.commit()
 

@@ -10,12 +10,13 @@ import asyncio
 import time
 import gc
 import random
+import zlib
 
 import cbor
 import blosc
 import asyncio_redis
 
-from asyncio_redis.encoders import BaseEncoder
+from asyncio_redis.encoders import BaseEncoder, BytesEncoder
 
 import tsd
 
@@ -268,8 +269,6 @@ async def phase1_main() -> typing.Awaitable[None]:
 
 async def packetizer_main() -> typing.Awaitable[None]:
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
-    datastore = tsd.TimeSeriesDatastore()
-    print('connected to datastore')
     while True:
         try:
             timestamp = await connection.brpop(['eof_timestamps'], 360)
@@ -285,10 +284,41 @@ async def packetizer_main() -> typing.Awaitable[None]:
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
-            datastore.add_measurement(timestamp, decoded['uid'], 'degc', decoded['temperature'])
-            datastore.add_measurement(timestamp, decoded['uid'], 'rh', decoded['humidity'])
+            await connection.publish('sensor_readings', [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
+            await connection.publish('sensor_readings', [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', [timestamp])
             await connection.delete([timestamp])
+    return None
+
+async def logger_main() -> typing.Awaitable[None]:
+    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
+    datastore = tsd.TimeSeriesDatastore()
+    print('connected to datastore')
+    subscription = await connection.start_subscribe()
+    await subscription.subscribe(['sensor_readings'])
+    while True:
+        reading = await subscription.next_published()
+        datastore.add_measurement(*(reading.value), raw=True)
+    return None
+
+
+update_interval = 120
+
+async def relay_main() -> typing.Awaitable[None]:
+    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
+    subscription = await connection.start_subscribe()
+    await subscription.subscribe(['sensor_readings'])
+    samples = {}
+    last_sent = time.time()
+    while True:
+        reading_bytes = await subscription.next_published()
+        reading = reading_bytes.value
+        samples[reading[1]+4096*reading[2]] = reading
+        if time.time() > (last_sent + update_interval):
+            update_samples = cbor.dumps([x for x in samples.values()])
+            print(len(update_samples), len(zlib.compress(update_samples)), update_samples)
+            last_sent = time.time()
+            samples = {}
     return None
 
 def spawner(future_yielder):
@@ -301,4 +331,6 @@ def spawner(future_yielder):
 if __name__ == "__main__":
     spawner(phase1_main)
     asyncio.ensure_future(packetizer_main())
+    asyncio.ensure_future(logger_main())
+    asyncio.ensure_future(relay_main())
     asyncio.get_event_loop().run_forever()
