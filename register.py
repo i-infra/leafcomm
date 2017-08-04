@@ -1,10 +1,8 @@
-from aiohttp import web
 import asyncio
 import uuid
 import base64
 import logging
 
-import aiohttp
 import requests
 
 import cbor
@@ -13,10 +11,13 @@ import nacl.public
 import asyncio_redis
 
 import phase1
+import aioudp
 
 relay_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x11\xd3U\xb0\xbc\xe0\xb32\x15t\xbb\xe49^Y\xbf2\x8dUo')
 
 guid = lambda : base64.urlsafe_b64encode(uuid.uuid4().bytes).decode('utf-8')
+
+sys_info = dict([(x.strip(), y.strip()) for (x,y) in [x.split(':') for x in open('/sys/class/sunxi_info/sys_info').read().split('\n') if x]])
 
 def register_box():
     uid = guid()
@@ -26,8 +27,6 @@ def register_box():
     response = requests.post('http://localhost:8019/register', signed_message)
     assert response.status_code == 200
     return uid, nacl.public.Box(node_key, relay_key)
-
-import aioudp
 
 async def start_udp_client(loop, host, port, box):
     redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = phase1.CborEncoder())
