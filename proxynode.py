@@ -12,12 +12,18 @@ import nacl.public
 import asyncio_redis
 
 import aioudp
-import phase1
+
+class CborEncoder(BaseEncoder):
+    native_type = object
+    def encode_from_native(self, data):
+        return cbor.dumps(data)
+    def decode_to_native(self, data):
+        return cbor.loads(data)
 
 relay_key = nacl.public.PrivateKey(b'\x8fw\xadU\xb6\x0bD\xd1\xbf>Q\xfa\xf5>9\xc4)\x0b\x11\xc8\xf9\x0e\xa3\x14\x14~:\x87\xa4\x12\x15.')
 
 async def start_udp_server(loop, host, port):
-    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = phase1.CborEncoder())
+    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     logging.debug('udp task connected to redis')
     udp = await aioudp.open_local_endpoint(host=host, port=port, loop=loop)
     logging.debug('listening on udp port')
@@ -27,8 +33,8 @@ async def start_udp_server(loop, host, port):
         await redis_connection.publish('udp_inbound', data)
 
 async def init_ws(request):
-    pubsub_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = phase1.CborEncoder())
-    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = phase1.CborEncoder())
+    pubsub_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
+    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     udp_inbound_channel  = await pubsub_connection.start_subscribe()
     await udp_inbound_channel.subscribe(['udp_inbound'])
     ws = web.WebSocketResponse()
@@ -53,7 +59,7 @@ async def init_ws(request):
     return ws
 
 async def register(request):
-    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = phase1.CborEncoder())
+    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     posted_bytes = await request.read()
     new_identity = nacl.public.SealedBox(relay_key).decrypt(posted_bytes)
     if new_identity is not None:

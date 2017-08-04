@@ -18,7 +18,7 @@ import asyncio_redis
 
 from asyncio_redis.encoders import BaseEncoder, BytesEncoder
 
-import tsd
+import ts_datastore as tsd
 
 FilterFunc = typing.Callable[[np.ndarray], np.ndarray]
 Info = typing.Dict
