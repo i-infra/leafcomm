@@ -8,14 +8,9 @@ import aiohttp
 from aiohttp import web
 
 import cbor
-
-ej = json.dumps
-dj = json.loads
-
-loop = asyncio.get_event_loop()
-
 import nacl.public
 import asyncio_redis
+
 import aioudp
 import phase1
 
@@ -48,9 +43,9 @@ async def init_ws(request):
             box = nacl.public.Box(relay_key, pub_key)
             while True:
                 udp_bytes = (await udp_inbound_channel.next_published()).value
-                print(udp_bytes)
                 cbor_bytes = box.decrypt(udp_bytes[0])
                 update_msg = cbor.loads(cbor_bytes)
+                print(update_msg)
                 json_bytes = json.dumps(update_msg)
                 ws.send_str(json_bytes)
         if msg.type == web.MsgType.close:
@@ -71,7 +66,6 @@ async def register(request):
                 await redis_connection.hset('identities', uid, pubkey_bytes)
         return web.Response(status=200)
     return web.Response(status=403)
-
 
 def create_app(loop):
     app = web.Application()
