@@ -2,6 +2,7 @@ import asyncio
 import uuid
 import base64
 import logging
+import zlib
 import json
 
 import aiohttp
@@ -10,8 +11,11 @@ from aiohttp import web
 import cbor
 import nacl.public
 import asyncio_redis
+from asyncio_redis.encoders import BaseEncoder
 
 import aioudp
+
+logging.getLogger().setLevel(logging.DEBUG)
 
 class CborEncoder(BaseEncoder):
     native_type = object
@@ -50,7 +54,7 @@ async def init_ws(request):
             while True:
                 udp_bytes = (await udp_inbound_channel.next_published()).value
                 cbor_bytes = box.decrypt(udp_bytes[0])
-                update_msg = cbor.loads(cbor_bytes)
+                update_msg = cbor.loads(zlib.decompress(cbor_bytes))
                 print(update_msg)
                 json_bytes = json.dumps(update_msg)
                 ws.send_str(json_bytes)
@@ -67,9 +71,12 @@ async def register(request):
         identities_exists = await redis_connection.exists('identities')
         if identities_exists:
             uid_in_table = uid in await redis_connection.hkeys('identities')
-            if not uid_in_table:
-                logging.debug('set '+str(uid))
-                await redis_connection.hset('identities', uid, pubkey_bytes)
+        else:
+            uid_in_table = False
+        if not uid_in_table:
+            logging.debug('set '+str(uid))
+            await redis_connection.hset('identities', uid, pubkey_bytes)
+            
         return web.Response(status=200)
     return web.Response(status=403)
 
@@ -83,5 +90,5 @@ def create_app(loop):
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     app = create_app(loop)
-    loop.create_task(start_udp_server(loop, 'localhost', 8019))
-    web.run_app(app, host = '0.0.0.0', port = 8019)
+    loop.create_task(start_udp_server(loop, '0.0.0.0', 8019))
+    web.run_app(app, host = '127.0.0.1', port = 8081)
