@@ -44,22 +44,28 @@ async def init_ws(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     uid = None
-    async for msg in ws:
-        if msg.type == aiohttp.WSMsgType.TEXT:
-            uid = str(msg.data)
-            print('rxed on', msg.type, msg.data)
-            pub_key_bytes = await redis_connection.hget('identities', uid)
-            pub_key = nacl.public.PublicKey(pub_key_bytes) 
-            box = nacl.public.Box(relay_key, pub_key)
-            while True:
-                udp_bytes = (await udp_inbound_channel.next_published()).value
-                cbor_bytes = box.decrypt(udp_bytes[0])
-                update_msg = cbor.loads(zlib.decompress(cbor_bytes))
-                print(update_msg)
-                json_bytes = json.dumps(update_msg)
-                ws.send_str(json_bytes)
-        if msg.type == web.MsgType.close:
-            break
+    msg = await ws.receive()
+    assert msg.type == aiohttp.WSMsgType.TEXT
+    uid = str(msg.data)
+    print('rxed on', msg.type, msg.data)
+    pub_key_bytes = await redis_connection.hget('identities', uid)
+    pub_key = nacl.public.PublicKey(pub_key_bytes)
+    box = nacl.public.Box(relay_key, pub_key)
+    while True:
+        ws_closed = False
+        udp_bytes = (await udp_inbound_channel.next_published()).value
+        compressed_cbor_bytes = box.decrypt(udp_bytes[0])
+        update_msg = cbor.loads(zlib.decompress(compressed_cbor_bytes))
+        json_bytes = json.dumps(update_msg)
+        print(json_bytes)
+        try:
+            msg = asyncio.wait_for(ws.receive(), 1)
+            print(msg)
+            if msg.type in [aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE]:
+                break
+        except asyncio.TimeoutError:
+            pass
+        ws.send_str(json_bytes)
     return ws
 
 async def register(request):
@@ -76,7 +82,6 @@ async def register(request):
         if not uid_in_table:
             logging.debug('set '+str(uid))
             await redis_connection.hset('identities', uid, pubkey_bytes)
-            
         return web.Response(status=200)
     return web.Response(status=403)
 
