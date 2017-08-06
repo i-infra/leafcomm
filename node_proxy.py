@@ -41,7 +41,7 @@ async def init_ws(request):
     redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     udp_inbound_channel  = await pubsub_connection.start_subscribe()
     await udp_inbound_channel.subscribe(['udp_inbound'])
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse()#heartbeat=1)
     await ws.prepare(request)
     uid = None
     msg = await ws.receive()
@@ -59,9 +59,9 @@ async def init_ws(request):
         json_bytes = json.dumps(update_msg)
         print(json_bytes)
         try:
-            msg = asyncio.wait_for(ws.receive(), 1)
+            msg = await asyncio.wait_for(ws.receive(), 1)
             print(msg)
-            if msg.type in [aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE]:
+            if msg.type in [aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING]:
                 break
         except asyncio.TimeoutError:
             pass
