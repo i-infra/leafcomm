@@ -81,6 +81,8 @@ def packed_bytes_to_iq(samples: bytes, out = None) -> typing.Union[None, np.ndar
     iq -= (1 + 1j)
     if out is None:
         return iq
+    else:
+        return True
 
 async def process_samples(sdr) -> typing.Awaitable[None]:
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())

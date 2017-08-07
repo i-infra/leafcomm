@@ -62,7 +62,7 @@ class Endpoint:
             raise IOError("Enpoint is closed")
         self._transport.sendto(data, addr)
 
-    async def read(self):
+    async def read(self, n = 0):
         if self._closed:
             raise IOError("Enpoint is closed")
         data, addr = await self._queue.get()
