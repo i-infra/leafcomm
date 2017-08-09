@@ -3,8 +3,27 @@ import json
 import random
 import time
 
-unit_list = ['none', 'degc', 'rh', 'kpa', 'watt']
-unit_human = ['None', 'Degrees Celsius', 'Relative Humidity', 'Kilopascals', 'Watts']
+unit_list = ['none', 'degc', 'rh', 'pa', 'watt', 'ph', 'ms_per_cm', 'ppm_co2', 'ppm_o', 'ppm_n', 'ppm_p', 'ppm_k', 'ppm_na', 'ppm_ca', 'ppm_mg', 'ppm_cl']
+# Specs for Lettuce
+# 18-25 degC
+# RH 50-70 %
+# 100000 pascal ~= 1 ATM
+# pH 5.8-6.0
+# 0 - 0.25 mS/cm - target water input conductivity
+# CO2 390 (ambient) - 1500 ppm w/ supplemental light
+# Disolved Oxygen = 4-20 ppm (5-13 in nature)
+# Nitrate = 189-225 ppm
+# Phosphorus = 47 ppm
+# Potassium = 281 - 351 ppm
+# Sodium < 50 ppm
+# Calcium = 170 - 212 ppm
+# Magnesium = 48 - 65 ppm
+# Chloride < 70 ppm
+# Iron, Manganese, Zinc, Boron, Copper, Molydenum - 2ppm and below, constant levels
+# http://ceac.arizona.edu/
+# http://www.greenhouse.cornell.edu/crops/factsheets/hydroponic-recipes.pdf
+# http://www.cornellcea.com/attachments/Cornell%20CEA%20Lettuce%20Handbook%20.pdf 
+unit_human = ['None', 'Degrees Celsius', 'Relative Humidity', 'Pascals', 'Watts', 'pH', 'Conductivity', 'PPM Carbon Dioxide', 'PPM Dissolved Oxygen', 'PPM Nitrate', 'PPM Phosphorus', 'PPM Potassium', 'PPM Sodium', 'PPM Calcium', 'PPM Magnesium', 'PPM Chloride']
 
 # kludge to pull enum into local namespace
 for i, unit in enumerate(unit_list):
@@ -63,7 +82,6 @@ class TimeSeriesDatastore(object):
         data = (timestamp, sensor_uid, unit_tag, value)
         self.cursor.executemany(inserter, [data])
         return self.conn.commit()
-
 
 if __name__ in ["__main__", "__console__"]:
     tsd = TimeSeriesDatastore()
