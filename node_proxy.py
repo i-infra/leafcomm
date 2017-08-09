@@ -26,22 +26,29 @@ class CborEncoder(BaseEncoder):
 
 relay_key = nacl.public.PrivateKey(b'\x8fw\xadU\xb6\x0bD\xd1\xbf>Q\xfa\xf5>9\xc4)\x0b\x11\xc8\xf9\x0e\xa3\x14\x14~:\x87\xa4\x12\x15.')
 
-async def start_udp_server(loop, host, port):
-    redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
-    logging.debug('udp task connected to redis')
-    udp = await aioudp.open_local_endpoint(host=host, port=port, loop=loop)
-    logging.debug('listening on udp port')
-    while True:
-        data = await udp.read()
+class ProxyDatagramProtocol(asyncio.DatagramProtocol):
+
+    def __init__(self, loop, connection):
+        self.loop = loop
+        self.connection = connection
+        super().__init__()
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def datagram_received(self, data, addr):
         logging.debug(data)
-        await redis_connection.publish('udp_inbound', data)
+        self.loop.create_task(submit_data(data, connection))
+
+async def submit_data(data, connection):
+    await connection.publish('udp_inbound', data)
 
 async def init_ws(request):
     pubsub_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     redis_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     udp_inbound_channel  = await pubsub_connection.start_subscribe()
     await udp_inbound_channel.subscribe(['udp_inbound'])
-    ws = web.WebSocketResponse()#heartbeat=1)
+    ws = web.WebSocketResponse()
     await ws.prepare(request)
     uid = None
     msg = await ws.receive()
@@ -95,5 +102,9 @@ def create_app(loop):
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     app = create_app(loop)
-    loop.create_task(start_udp_server(loop, '0.0.0.0', 8019))
+    connection_fut = asyncio.ensure_future(asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder()))
+    connection = loop.run_until_complete(connection_fut)
+    protocol = ProxyDatagramProtocol(loop, connection)
+    loop.create_task(loop.create_datagram_endpoint(
+        lambda: protocol, local_addr=('0.0.0.0', 8019)))
     web.run_app(app, host = '127.0.0.1', port = 8081)
