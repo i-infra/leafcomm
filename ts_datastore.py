@@ -3,13 +3,14 @@ import json
 import random
 import time
 
-unit_list = ['none', 'degc', 'rh', 'pa', 'watt', 'ph', 'ms_per_cm', 'ppm_co2', 'ppm_o', 'ppm_n', 'ppm_p', 'ppm_k', 'ppm_na', 'ppm_ca', 'ppm_mg', 'ppm_cl']
+unit_list = ['none', 'degc', 'rh', 'pa', 'watt', 'ph', 'ms_per_cm', 'umol_per_m2_per_sec', 'ppm_co2', 'ppm_o', 'ppm_n', 'ppm_p', 'ppm_k', 'ppm_na', 'ppm_ca', 'ppm_mg', 'ppm_cl']
 # Specs for Lettuce
 # 18-25 degC
 # RH 50-70 %
 # 100000 pascal ~= 1 ATM
 # pH 5.8-6.0
 # 0 - 0.25 mS/cm - target water input conductivity
+# PAR 100-200 umol/m2/s DLI: 17 mol / m**2 / day
 # CO2 390 (ambient) - 1500 ppm w/ supplemental light
 # Disolved Oxygen = 4-20 ppm (5-13 in nature)
 # Nitrate = 189-225 ppm
@@ -23,7 +24,7 @@ unit_list = ['none', 'degc', 'rh', 'pa', 'watt', 'ph', 'ms_per_cm', 'ppm_co2', '
 # http://ceac.arizona.edu/
 # http://www.greenhouse.cornell.edu/crops/factsheets/hydroponic-recipes.pdf
 # http://www.cornellcea.com/attachments/Cornell%20CEA%20Lettuce%20Handbook%20.pdf 
-unit_human = ['None', 'Degrees Celsius', 'Relative Humidity', 'Pascals', 'Watts', 'pH', 'Conductivity', 'PPM Carbon Dioxide', 'PPM Dissolved Oxygen', 'PPM Nitrate', 'PPM Phosphorus', 'PPM Potassium', 'PPM Sodium', 'PPM Calcium', 'PPM Magnesium', 'PPM Chloride']
+unit_human = ['None', 'Degrees Celsius', 'Relative Humidity', 'Pascals', 'Watts', 'pH', 'Conductivity', 'Photosynthetically Active Radiation (PAR)' 'PPM Carbon Dioxide', 'PPM Dissolved Oxygen', 'PPM Nitrate', 'PPM Phosphorus', 'PPM Potassium', 'PPM Sodium', 'PPM Calcium', 'PPM Magnesium', 'PPM Chloride']
 
 # kludge to pull enum into local namespace
 for i, unit in enumerate(unit_list):
