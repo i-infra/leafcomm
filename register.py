@@ -4,6 +4,7 @@ import base64
 import logging
 import zlib
 import time
+import socket
 
 import requests
 
@@ -12,8 +13,6 @@ import nacl
 import nacl.public
 import asyncio_redis
 from asyncio_redis.encoders import BaseEncoder
-
-import aioudp
 
 logging.getLogger().setLevel(logging.DEBUG)
 relay_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x11\xd3U\xb0\xbc\xe0\xb32\x15t\xbb\xe49^Y\xbf2\x8dUo')
@@ -41,11 +40,11 @@ def register_box():
 update_interval = 2
 
 async def start_udp_client(loop, host, port, box):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     pubsub_connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     subscription = await pubsub_connection.start_subscribe()
     await subscription.subscribe(['sensor_readings'])
     logging.debug('udp relayer connected to redis')
-    udp = await aioudp.open_remote_endpoint(host=host, port=port, loop=loop)
     samples = {}
     last_sent = time.time()
     while True:
@@ -58,7 +57,7 @@ async def start_udp_client(loop, host, port, box):
         if time.time() > (last_sent + update_interval):
             update_samples = [x for x in samples.values()]
             logging.debug(update_samples)
-            udp.write(box.encrypt(zlib.compress(cbor.dumps(update_samples))))
+            sock.sendto(box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, port))
             last_sent = time.time()
 
 if __name__ == "__main__":
