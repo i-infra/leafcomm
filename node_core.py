@@ -14,6 +14,7 @@ import random
 import zlib
 import logging
 import json
+import base64
 
 import itertools as its
 
@@ -109,6 +110,8 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
         if total == 0:
             total = pwr
         if pwr > (total / count):
+            if loud is False:
+                timestamp = time.time()
             total += (pwr - (total/count))/100.
             loud = True
             block.append(np.copy(complex_samples))
@@ -118,7 +121,6 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
             count += 1
             if loud is True:
                 acc += 1
-                timestamp = time.time()
                 block.append(np.copy(complex_samples))
                 block = np.concatenate(block)
                 size, dtype, compressed = compress(block)
@@ -126,12 +128,11 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
                 await connection.set(timestamp, info)
                 await connection.lpush('eof_timestamps', [timestamp])
                 await connection.expireat(timestamp, int(timestamp+600))
-                print('flushing:', {'duration': time.time()-last, 'block count': acc, 'block_power': np.sum(np.abs(block))/acc, 'threshold': total/count, 'lifetime_blocks': count})
+                print('flushing:', {'duration': time.time()-timestamp, 'block count': acc, 'block_power': np.sum(np.abs(block))/acc, 'threshold': total/count, 'lifetime_blocks': count})
                 block = []
                 loud = False
                 acc = 0
                 gc.collect()
-        last = time.time()
     return None
 
 def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.ndarray:
@@ -295,7 +296,7 @@ async def packetizer_main() -> typing.Awaitable[None]:
             decoded = {}
         else:
             decoded = try_decode(info, timestamp)
-        logging.debug('packetizer decoded %s' % (json.dumps(decoded,)))
+        logging.debug('packetizer decoded %s %s' % (base64.b64encode(cbor.dumps(timestamp)), json.dumps(decoded,)))
         if decoded == {}:
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', [timestamp])
