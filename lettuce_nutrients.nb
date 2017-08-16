@@ -1,0 +1,17 @@
+STOCK A
+These chemicals are added to 300 L of RO water
+Calcium Nitrate 29160.0 g
+Potassium Nitrate 6132.0 g
+Ammonium Nitrate 840.0 g
+Sprint 330 Iron - DTPA (10% Iron) 562.0 g
+STOCK B
+These chemicals are added to 300L of RO water
+Potassium Nitrate 20378.0 g
+Monopotassium Phosphate 8160.0 g
+Potassium Sulfate 655.0 g
+Magnesium Sulfate 7380.0 g
+Manganese Sulfate*H2O (25% Mn) 25.6 g
+Zinc Sulfate*H2O (35% Zn) 34.4 g
+Boric Acid (17.5% B) 55.8 g
+Copper Sulfate*5H2O (25% Cu) 5.6 g
+Sodium Molybdate*2H2O (39% Mo) 3.6 g
