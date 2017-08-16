@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import numexpr3 as ne3
 import bottleneck as bn
@@ -11,6 +13,8 @@ import time
 import gc
 import random
 import zlib
+import logging
+import json
 
 import cbor
 import blosc
@@ -19,6 +23,8 @@ import asyncio_redis
 from asyncio_redis.encoders import BaseEncoder, BytesEncoder
 
 import ts_datastore as tsd
+
+logging.getLogger().setLevel(logging.DEBUG)
 
 FilterFunc = typing.Callable[[np.ndarray], np.ndarray]
 Info = typing.Dict
@@ -98,7 +104,7 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
         pwr = np.sum(np.abs(complex_samples))
         if ((count % 1000) == 1) and (loud is False):
             sdr.set_center_freq(random.randrange(int(433.8e6), int(434e6), step = 10000))
-            print("center frequency:", sdr.get_center_freq())
+            logging.info("center frequency: %d" % (sdr.get_center_freq()))
         if total == 0:
             total = pwr
         if pwr > (total / count):
@@ -110,14 +116,16 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
             total += pwr
             count += 1
             if loud is True:
+                acc += 1
                 timestamp = time.time()
                 block.append(np.copy(complex_samples))
-                size, dtype, compressed = compress(np.concatenate(block))
+                block = np.concatenate(block)
+                size, dtype, compressed = compress(block)
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                 await connection.set(timestamp, info)
                 await connection.lpush('eof_timestamps', [timestamp])
                 await connection.expireat(timestamp, int(timestamp+600))
-                print('flushing:', time.time()-last, acc, pwr, total/count, count)
+                print('flushing:', {'duration': time.time()-last, 'block count': acc, 'block_power': np.sum(np.abs(block))/acc, 'threshold': total/count, 'lifetime_blocks': count})
                 block = []
                 loud = False
                 acc = 0
@@ -129,11 +137,14 @@ def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.nda
     beep_samples = decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype = 'float32')
-    ne3.evaluate('beep_absolute = abs(beep_samples)')
+    ne3.evaluate('beep_absolute = abs(beep_samples)', local_dict={'beep_absolute':beep_absolute, 'beep_samples':beep_samples})
+    #beep_absolute = np.abs(beep_samples)
     beep_smoothed = smoother(beep_absolute)
     threshold = 1.1*bn.nanmean(beep_smoothed)
-    beep_binary = np.empty(shape, dtype=bool)
-    ne3.evaluate('beep_binary = beep_smoothed > threshold')
+    #beep_binary = np.empty(shape, dtype=bool)
+    #ne3.evaluate('beep_binary = beep_smoothed > threshold')#, local_dict={'beep_binary':beep_binary, 'beep_smoothed':beep_smoothed, 'threshold':threshold})
+    #print('beep_binary   success')
+    beep_binary = beep_smoothed > threshold
     pulses = rle(beep_binary)
     return np.array(pulses)
 
@@ -242,7 +253,7 @@ def decode_pulses(pulses: np.ndarray) -> typing.Dict:
         for packet in demodulator(pulses):
             res = silver_sensor(packet)
             if 'uid' in res.keys():
-                print(printer(packet.packet))
+                logging.info(printer(packet.packet))
                 res['uid'] = (res['channel']+1*1024)+res['uid']
                 return res
     return {}
@@ -256,20 +267,21 @@ def try_decode(info: typing.Dict, timestamp = 0) -> typing.Dict:
     return {}
 
 async def phase1_main() -> typing.Awaitable[None]:
-    print('initialising SDR...')
+    logging.info('initialising SDR...')
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
     sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 3
 
-    print('streaming bytes...')
+    logging.info('streaming bytes...')
     await process_samples(sdr)
     await sdr.stop()
-    print('Done')
+    logging.info('Done')
     sdr.close()
     return None
 
 async def packetizer_main() -> typing.Awaitable[None]:
+    logging.info('launched packetizer')
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     while True:
         try:
@@ -282,6 +294,7 @@ async def packetizer_main() -> typing.Awaitable[None]:
             decoded = {}
         else:
             decoded = try_decode(info, timestamp)
+        logging.debug('packetizer decoded %s' % (json.dumps(decoded,)))
         if decoded == {}:
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', [timestamp])
@@ -295,7 +308,7 @@ async def packetizer_main() -> typing.Awaitable[None]:
 async def logger_main() -> typing.Awaitable[None]:
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     datastore = tsd.TimeSeriesDatastore()
-    print('connected to datastore')
+    logging.info('connected to datastore')
     subscription = await connection.start_subscribe()
     await subscription.subscribe(['sensor_readings'])
     while True:
@@ -310,8 +323,14 @@ def spawner(future_yielder):
         loop.run_forever()
     multiprocessing.Process(target = loopwrapper, args = (future_yielder,)).start()
 
-if __name__ == "__main__":
-    spawner(phase1_main)
-    asyncio.ensure_future(packetizer_main())
-    asyncio.ensure_future(logger_main())
+def __main__():
+    funcs = {'packetizer_main': packetizer_main, 'phase1_main': phase1_main, 'logger_main': logger_main}
+    if sys.argv[-1] == "all":
+        for func in funcs.values():
+            spawner(func)
+    elif sys.argv[-1] in funcs.keys():
+        spawner(funcs[sys.argv[-1]])
     asyncio.get_event_loop().run_forever()
+
+if __name__ == "__main__":
+    __main__()

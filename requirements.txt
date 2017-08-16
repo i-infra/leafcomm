@@ -8,4 +8,5 @@ pyrtlsdr
 #cairocffi
 #numexpr3
 git+https://github.com/pydata/numexpr.git@numexpr-3.0
+git+https://github.com/pyca/pynacl.git
 Cython
