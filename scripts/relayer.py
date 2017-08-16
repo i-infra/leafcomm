@@ -2,7 +2,7 @@ import sys
 sys.path.append('./')
 import asyncio
 import asyncio_redis
-import phase1
+import node_core
 import cbor
 import base64
 
@@ -11,12 +11,12 @@ async def main():
         reader, writer = await asyncio.open_connection(sys.argv[1], int(sys.argv[2]))
     except:
         writer = None
-    conn = await asyncio_redis.Connection.create('localhost', 6379, encoder=phase1.CborEncoder())
+    conn = await asyncio_redis.Connection.create('localhost', 6379, encoder=node_core.CborEncoder())
     failed = await conn.smembers_asset('nontrivial_timestamps')
     byte_count = 0
     def forwarder(info):
         if writer is not None:
-            ba = phase1.decompress(**info)*255
+            ba = node_core.decompress(**info)*255
             writer.write(ba.tobytes())
             ab = ba*0.0
             writer.write(ab.tobytes())

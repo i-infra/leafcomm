@@ -304,7 +304,7 @@ async def packetizer_main() -> typing.Awaitable[None]:
             await connection.publish('sensor_readings', [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
             await connection.publish('sensor_readings', [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', [timestamp])
-            await connection.delete([timestamp])
+            await connection.expire(timestamp, 120)
     return None
 
 async def logger_main() -> typing.Awaitable[None]:
