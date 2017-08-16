@@ -1,9 +1,8 @@
 import sys
 
 import numpy as np
-import numexpr3 as ne3
 import bottleneck as bn
-import itertools as its
+#import numexpr3 as ne3
 
 import statistics
 import typing
@@ -15,6 +14,8 @@ import random
 import zlib
 import logging
 import json
+
+import itertools as its
 
 import cbor
 import blosc
@@ -137,8 +138,8 @@ def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.nda
     beep_samples = decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype = 'float32')
-    ne3.evaluate('beep_absolute = abs(beep_samples)', local_dict={'beep_absolute':beep_absolute, 'beep_samples':beep_samples})
-    #beep_absolute = np.abs(beep_samples)
+    #ne3.evaluate('beep_absolute = abs(beep_samples)', local_dict={'beep_absolute':beep_absolute, 'beep_samples':beep_samples})
+    beep_absolute = np.abs(beep_samples)
     beep_smoothed = smoother(beep_absolute)
     threshold = 1.1*bn.nanmean(beep_smoothed)
     #beep_binary = np.empty(shape, dtype=bool)
