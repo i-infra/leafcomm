@@ -5,6 +5,7 @@
    - code_path: /home/sproutwave/sproutwave_node
    - sproutwave_user: sproutwave
    tasks:
+   - user: name=sproutwave state=present shell=/bin/bash
    - name: aptitude
      apt: name=aptitude state=installed
    - name: apt-get update && apt-get upgrade
@@ -48,6 +49,10 @@
    - name: restart redis
      service: name=redis state=restarted
    - name: build python venv
+     command: pyvenv-3.5 --clear {{venv_path}}
+     become: true
+     become_user: sproutwave
+   - name: build python venv
      command: pyvenv-3.5 --system-site-packages {{venv_path}}
      become: true
      become_user: sproutwave
@@ -55,7 +60,6 @@
      synchronize: src=../swbs/ dest={{code_path}} #owner={{sproutwave_user}}
      become: true
      become_user: sproutwave
-     #git: repo="https://github.com/itdaniher/mana.git" dest={{code_path}}
    - name: set permissions
      file: dest={{code_path}} owner={{sproutwave_user}} group={{sproutwave_user}} recurse=yes
    - name: install python requirements
