@@ -1,0 +1,27 @@
+librtlsdr:
+
+> cmake ../ -DINSTALL_UDEV_RULES=ON -DDETACH_KERNEL_DRIVER=ON  
+
+
+pyfftw:
+
+> ./configure --enable-shared --enable-threads --enable-neon --enable-single
+
+pyrtlsdr:
+
+diff --git a/rtlsdr/rtlsdr.py b/rtlsdr/rtlsdr.py
+index 1a64226..6735744 100644
+--- a/rtlsdr/rtlsdr.py
++++ b/rtlsdr/rtlsdr.py
+@@ -380,8 +380,9 @@ class BaseRtlSdr(object):
+         '''
+         if has_numpy:
+             # use NumPy array
++            bytes_np = np.ctypeslib.as_array(bytes)
+             iq = np.empty(len(bytes)//2, 'complex')
+-            iq.real, iq.imag = bytes[::2], bytes[1::2]
++            iq.real, iq.imag = bytes_np[::2], bytes_np[1::2]
+             iq /= (255/2)
+             iq -= (1 + 1j)
+         else:
+

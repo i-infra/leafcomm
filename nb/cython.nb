@@ -1,0 +1,1 @@
+gcc -fPIC -DNDEBUG -O2 packetizer.c -Wall -Wstrict-prototypes -I/usr/local/include/python3.6m -L/usr/local/lib -lpython3.6 -o ./packetizer

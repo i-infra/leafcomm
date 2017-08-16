@@ -1,0 +1,2 @@
+cmake -DINSTALL_UDEV_RULES=ON -DDETACH_KERNEL_DRIVER=1
+sudo make install
