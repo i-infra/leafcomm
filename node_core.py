@@ -2,7 +2,6 @@ import sys
 
 import numpy as np
 import bottleneck as bn
-#import numexpr3 as ne3
 
 import statistics
 import typing
@@ -58,7 +57,6 @@ try:
         y = lfilter(b, a, data)
         return y
     lowpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'low', order = 4)
-    #bandpass = lambda xs: butter_filter(xs, 2e3, 256e3, 'bandpass', order = 4)
     filters = [brickwall, lowpass]
 except:
     filters = [brickwall]
@@ -94,44 +92,38 @@ def packed_bytes_to_iq(samples: bytes, out = None) -> typing.Union[None, np.ndar
 
 async def process_samples(sdr) -> typing.Awaitable[None]:
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
-    (block_size, max_blocks) = (1024*32, 40)
+    block_size  = 512*64
     samp_size = block_size // 2
-    (total, acc, count) = (0, 0, 1)
-    last = time.time()
-    loud = False
-    block = []
+    (loud, blocks, total, count) = (False, [], 0,  1)
     async for byte_samples in sdr.stream(block_size, format = 'bytes'):
         complex_samples = np.empty(samp_size, 'complex64')
         packed_bytes_to_iq(byte_samples, complex_samples)
         pwr = np.sum(np.abs(complex_samples))
+        avg = total/count
         if ((count % 1000) == 1) and (loud is False):
             sdr.set_center_freq(random.randrange(int(433.8e6), int(434e6), step = 10000))
             logging.info("center frequency: %d" % (sdr.get_center_freq()))
         if total == 0:
             total = pwr
-        if pwr > (total / count):
+        if pwr > avg:
             if loud is False:
                 timestamp = time.time()
-            total += (pwr - (total/count))/100.
+            total += (pwr - avg)/100.
             loud = True
-            block.append(np.copy(complex_samples))
-            acc += 1
+            blocks.append(np.copy(complex_samples))
         else:
             total += pwr
             count += 1
             if loud is True:
-                acc += 1
-                block.append(np.copy(complex_samples))
-                block = np.concatenate(block)
+                blocks.append(np.copy(complex_samples))
+                block = np.concatenate(blocks)
                 size, dtype, compressed = compress(block)
                 info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                 await connection.set(timestamp, info)
                 await connection.lpush('eof_timestamps', [timestamp])
                 await connection.expireat(timestamp, int(timestamp+600))
-                print('flushing:', {'duration': time.time()-timestamp, 'block count': acc, 'block_power': np.sum(np.abs(block))/acc, 'threshold': total/count, 'lifetime_blocks': count})
-                block = []
-                loud = False
-                acc = 0
+                print('flushing:', {'duration': time.time()-timestamp, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
+                (blocks, loud) = ([], False)
                 gc.collect()
     return None
 
@@ -139,13 +131,9 @@ def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.nda
     beep_samples = decompress(**info)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype = 'float32')
-    #ne3.evaluate('beep_absolute = abs(beep_samples)', local_dict={'beep_absolute':beep_absolute, 'beep_samples':beep_samples})
     beep_absolute = np.abs(beep_samples)
     beep_smoothed = smoother(beep_absolute)
     threshold = 1.1*bn.nanmean(beep_smoothed)
-    #beep_binary = np.empty(shape, dtype=bool)
-    #ne3.evaluate('beep_binary = beep_smoothed > threshold')#, local_dict={'beep_binary':beep_binary, 'beep_smoothed':beep_smoothed, 'threshold':threshold})
-    #print('beep_binary   success')
     beep_binary = beep_smoothed > threshold
     pulses = rle(beep_binary)
     return np.array(pulses)
@@ -273,7 +261,7 @@ async def phase1_main() -> typing.Awaitable[None]:
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
-    sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 3
+    sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 20 
 
     logging.info('streaming bytes...')
     await process_samples(sdr)
