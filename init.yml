@@ -20,6 +20,7 @@
       - python3-numpy
       - python3-pip
       - build-essential
+      - cmake # building librtlsdr
       - libuv-dev
       - libffi-dev
       - libudev-dev #libusb-dev installed
