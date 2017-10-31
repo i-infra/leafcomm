@@ -10,7 +10,6 @@ import asyncio
 import time
 import gc
 import random
-import zlib
 import logging
 import json
 import base64
@@ -101,6 +100,8 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
         pwr = np.sum(np.abs(complex_samples))
         avg = total/count
         if ((count % 1000) == 1) and (loud is False):
+            if count > 10000:
+                (total, count) = (avg, 1)
             sdr.set_center_freq(random.randrange(int(433.8e6), int(434e6), step = 10000))
             logging.info("center frequency: %d" % (sdr.get_center_freq()))
         if total == 0:
@@ -115,14 +116,17 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
             total += pwr
             count += 1
             if loud is True:
-                blocks.append(np.copy(complex_samples))
-                block = np.concatenate(blocks)
-                size, dtype, compressed = compress(block)
-                info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                await connection.set(timestamp, info)
-                await connection.lpush('eof_timestamps', [timestamp])
-                await connection.expireat(timestamp, int(timestamp+600))
-                print('flushing:', {'duration': time.time()-timestamp, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
+                if len(blocks) > 9:
+                    blocks.append(np.copy(complex_samples))
+                    block = np.concatenate(blocks)
+                    size, dtype, compressed = compress(block)
+                    info = {'size': size, 'dtype': dtype.name, 'data': compressed}
+                    await connection.set(timestamp, info)
+                    await connection.lpush('eof_timestamps', [timestamp])
+                    await connection.expireat(timestamp, int(timestamp+600))
+                    print('flushing:', {'duration': time.time()-timestamp, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
+                else:
+                    print('short block')
                 (blocks, loud) = ([], False)
                 gc.collect()
     return None
@@ -232,7 +236,7 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             channel = n[3]&0x3
             battery_ok = (0b1000 & n[2]) == 0
             temp /= 10
-            rh = n[7]*10 + n[8]
+            rh = n[7]*16 + n[8]
             if n[0] == 5:
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return {}
@@ -261,7 +265,7 @@ async def phase1_main() -> typing.Awaitable[None]:
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
-    sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 20 
+    sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 9
 
     logging.info('streaming bytes...')
     await process_samples(sdr)
