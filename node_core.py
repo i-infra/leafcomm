@@ -36,7 +36,7 @@ stereo_to_complex = lambda a: a[0] + a[1]*1j
 rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in its.groupby(xs, lambda x: x[1])]
 rle = lambda xs: [(len(list(gp)), x) for x, gp in its.groupby(xs)]
 rld = lambda xs: its.chain.from_iterable(its.repeat(x, n) for n, x in xs)
-
+get_func_name = lambda depth=0: sys._getframe(depth + 1).f_code.co_name
 (L,H,E) = (0,1,2)
 
 printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
@@ -90,6 +90,7 @@ def packed_bytes_to_iq(samples: bytes, out = None) -> typing.Union[None, np.ndar
         return True
 
 async def process_samples(sdr) -> typing.Awaitable[None]:
+    logging.info('starting: ' + get_func_name())
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     block_size  = 512*64
     samp_size = block_size // 2
@@ -261,7 +262,7 @@ def try_decode(info: typing.Dict, timestamp = 0) -> typing.Dict:
     return {}
 
 async def phase1_main() -> typing.Awaitable[None]:
-    logging.info('initialising SDR...')
+    logging.info('starting: ' + get_func_name())
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
@@ -275,7 +276,7 @@ async def phase1_main() -> typing.Awaitable[None]:
     return None
 
 async def packetizer_main() -> typing.Awaitable[None]:
-    logging.info('launched packetizer')
+    logging.info('starting: ' + get_func_name())
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     while True:
         try:
@@ -300,6 +301,7 @@ async def packetizer_main() -> typing.Awaitable[None]:
     return None
 
 async def logger_main() -> typing.Awaitable[None]:
+    logging.info('starting: ' + get_func_name())
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     datastore = tsd.TimeSeriesDatastore()
     logging.info('connected to datastore')
@@ -315,15 +317,14 @@ def spawner(future_yielder):
         loop = asyncio.get_event_loop()
         asyncio.ensure_future(main())
         loop.run_forever()
-    multiprocessing.Process(target = loopwrapper, args = (future_yielder,)).start()
+    process = multiprocessing.Process(target = loopwrapper, args = (future_yielder,))
+    process.start()
+    return process
 
 def __main__():
-    funcs = {'packetizer_main': packetizer_main, 'phase1_main': phase1_main, 'logger_main': logger_main}
-    if sys.argv[-1] == "all":
-        for func in funcs.values():
-            spawner(func)
-    elif sys.argv[-1] in funcs.keys():
-        spawner(funcs[sys.argv[-1]])
+    funcs = (packetizer_main, phase1_main, logger_main)
+    procs = [spawner(func) for func in funcs]
+    print(procs)
     asyncio.get_event_loop().run_forever()
 
 if __name__ == "__main__":
