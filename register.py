@@ -6,7 +6,7 @@ import zlib
 import time
 import socket
 
-import requests
+import urllib.request
 
 import cbor
 import nacl
@@ -19,7 +19,6 @@ relay_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x
 
 guid = lambda : base64.urlsafe_b64encode(uuid.uuid4().bytes).decode('utf-8')
 
-sys_info = dict([(x.strip(), y.strip()) for (x,y) in [x.split(':') for x in open('/sys/class/sunxi_info/sys_info').read().split('\n') if x]])
 
 class CborEncoder(BaseEncoder):
     native_type = object
@@ -33,8 +32,8 @@ def register_box():
     node_key = nacl.public.PrivateKey.generate()
     identity_pair = [uid, node_key.public_key.encode()]
     signed_message = nacl.public.SealedBox(relay_key).encrypt(cbor.dumps(identity_pair))
-    response = requests.post('https://data.sproutwave.com:8444/register', signed_message)
-    assert response.status_code == 200
+    response = urllib.request.urlopen('https://data.sproutwave.com:8444/register', data=signed_message)
+    assert response.getcode() == 200
     return uid, nacl.public.Box(node_key, relay_key)
 
 update_interval = 2
