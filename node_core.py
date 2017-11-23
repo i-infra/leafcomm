@@ -36,7 +36,7 @@ stereo_to_complex = lambda a: a[0] + a[1]*1j
 rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in its.groupby(xs, lambda x: x[1])]
 rle = lambda xs: [(len(list(gp)), x) for x, gp in its.groupby(xs)]
 rld = lambda xs: its.chain.from_iterable(its.repeat(x, n) for n, x in xs)
-get_func_name = lambda depth=0: sys._getframe(depth + 1).f_code.co_name
+get_function_name = lambda depth=0: sys._getframe(depth + 1).f_code.co_name
 (L,H,E) = (0,1,2)
 
 printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
@@ -89,13 +89,27 @@ def packed_bytes_to_iq(samples: bytes, out = None) -> typing.Union[None, np.ndar
     else:
         return True
 
-async def process_samples(sdr) -> typing.Awaitable[None]:
-    logging.info('starting: ' + get_func_name())
+async def init_redis():
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
+    return connection
+
+async def tick(redis_connection, function_name_depth=1):
+    name = get_function_name(function_name_depth)
+    await redis_connection.hset('ticks', name, time.time())
+
+async def get_ticks(connection = None):
+    if connection == None:
+        connection = await init_redis()
+    return await connection.hgetall_asdict('ticks')
+
+async def process_samples(sdr) -> typing.Awaitable[None]:
+    logging.info('starting: ' + get_function_name())
+    connection = await init_redis()
     block_size  = 512*64
     samp_size = block_size // 2
     (loud, blocks, total, count) = (False, [], 0,  1)
     async for byte_samples in sdr.stream(block_size, format = 'bytes'):
+        await tick(connection, function_name_depth=2)
         complex_samples = np.empty(samp_size, 'complex64')
         packed_bytes_to_iq(byte_samples, complex_samples)
         pwr = np.sum(np.abs(complex_samples))
@@ -262,7 +276,7 @@ def try_decode(info: typing.Dict, timestamp = 0) -> typing.Dict:
     return {}
 
 async def phase1_main() -> typing.Awaitable[None]:
-    logging.info('starting: ' + get_func_name())
+    logging.info('starting: ' + get_function_name())
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
@@ -276,9 +290,9 @@ async def phase1_main() -> typing.Awaitable[None]:
     return None
 
 async def packetizer_main() -> typing.Awaitable[None]:
-    logging.info('starting: ' + get_func_name())
-    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
+    connection = await init_redis()
     while True:
+        await tick(connection)
         try:
             timestamp = await connection.brpop(['eof_timestamps'], 360)
             timestamp = timestamp.value
@@ -301,8 +315,8 @@ async def packetizer_main() -> typing.Awaitable[None]:
     return None
 
 async def logger_main() -> typing.Awaitable[None]:
-    logging.info('starting: ' + get_func_name())
-    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
+    connection = await init_redis()
+    tick_connection = await init_redis()
     datastore = tsd.TimeSeriesDatastore()
     logging.info('connected to datastore')
     subscription = await connection.start_subscribe()
@@ -310,9 +324,11 @@ async def logger_main() -> typing.Awaitable[None]:
     while True:
         reading = await subscription.next_published()
         datastore.add_measurement(*(reading.value), raw=True)
+        await tick(tick_connection)
     return None
 
 def spawner(future_yielder):
+    logging.info('starting: ' + future_yielder.__name__)
     def loopwrapper(main):
         loop = asyncio.get_event_loop()
         asyncio.ensure_future(main())
@@ -325,7 +341,11 @@ def __main__():
     funcs = (packetizer_main, phase1_main, logger_main)
     procs = [spawner(func) for func in funcs]
     print(procs)
-    asyncio.get_event_loop().run_forever()
+    connection = asyncio.get_event_loop().run_until_complete(init_redis())
+    while True:
+        ticks = asyncio.get_event_loop().run_until_complete(get_ticks(connection))
+        print(ticks)
+        time.sleep(2)
 
 if __name__ == "__main__":
     __main__()
