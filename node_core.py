@@ -15,6 +15,7 @@ import json
 import base64
 
 import itertools as its
+import functools as f
 
 import cbor
 import blosc
@@ -95,12 +96,12 @@ async def init_redis():
 
 async def tick(redis_connection, function_name_depth=1):
     name = get_function_name(function_name_depth)
-    await redis_connection.hset('ticks', name, time.time())
+    await redis_connection.hset('sproutwave_ticks', name, time.time())
 
 async def get_ticks(connection = None):
     if connection == None:
         connection = await init_redis()
-    return await connection.hgetall_asdict('ticks')
+    return await connection.hgetall_asdict('sproutwave_ticks')
 
 async def process_samples(sdr) -> typing.Awaitable[None]:
     logging.info('starting: ' + get_function_name())
@@ -327,25 +328,45 @@ async def logger_main() -> typing.Awaitable[None]:
         await tick(tick_connection)
     return None
 
-def spawner(future_yielder):
-    logging.info('starting: ' + future_yielder.__name__)
-    def loopwrapper(main):
-        loop = asyncio.get_event_loop()
-        asyncio.ensure_future(main())
-        loop.run_forever()
-    process = multiprocessing.Process(target = loopwrapper, args = (future_yielder,))
+def spawner(function_or_coroutine):
+    logging.info('starting: ' + function_or_coroutine.__name__)
+    def callable_wrapper(main):
+        if asyncio.iscoroutinefunction(main):
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(main())
+        else:
+            return main()
+    process = multiprocessing.Process(target = callable_wrapper, args = (function_or_coroutine,))
     process.start()
     return process
 
-def __main__():
-    funcs = (packetizer_main, phase1_main, logger_main)
-    procs = [spawner(func) for func in funcs]
-    print(procs)
-    connection = asyncio.get_event_loop().run_until_complete(init_redis())
+async def monitor(redis_connection = None, threshold = 600, key = "sproutwave_ticks", send_pipe = None):
+    if redis_connection == None:
+        redis_connection = await init_redis()
     while True:
-        ticks = asyncio.get_event_loop().run_until_complete(get_ticks(connection))
-        print(ticks)
-        time.sleep(2)
+        now = time.time()
+        ticks = await get_ticks(redis_connection)
+        for name, timestamp in ticks.items():
+            print(now, name, timestamp)
+            if (now - timestamp) > 120 and name is not None:
+                if send_pipe is not None:
+                    send_pipe.send(name)
+                return None
+        await asyncio.sleep(60 - (time.time()-now))
+
+def main():
+    funcs = (packetizer_main, phase1_main, logger_main)
+    proc_mapping = {}
+    while True:
+        print(proc_mapping)
+        for func in funcs:
+            name = func.__name__
+            logging.info('(re)starting %s' % name)
+            if name in proc_mapping.keys():
+                proc_mapping[name].terminate()
+            proc_mapping[name] = spawner(func)
+        time.sleep(30)
+        spawner(monitor).join()
 
 if __name__ == "__main__":
-    __main__()
+    main()
