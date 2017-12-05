@@ -103,11 +103,30 @@ async def get_ticks(connection = None, key = 'sproutwave_ticks'):
         connection = await init_redis()
     return await connection.hgetall_asdict(key)
 
+async def metapub(connection, channel, timestamp, info):
+    if timestamp == None:
+        timestamp = time.time()
+    await connection.set(timestamp, info)
+    await connection.lpush(channel, [timestamp])
+    await connection.expireat(timestamp, int(timestamp+600))
+
+async def metasub(connection, channel):
+    while True:
+        try:
+            timestamp = await connection.brpop([channel], 360)
+            timestamp = timestamp.value
+            info = await connection.get(timestamp)
+        except:
+            timestamp = info = None
+        yield (timestamp, info)
+
 async def process_samples(sdr) -> typing.Awaitable[None]:
     connection = await init_redis()
     block_size  = 512*64
     samp_size = block_size // 2
     (loud, blocks, total, count) = (False, [], 0,  1)
+    center_frequency = 433.9e6
+    get_new_center = lambda: random.randrange(int(433.8e6), int(434e6), step = 10000)
     async for byte_samples in sdr.stream(block_size, format = 'bytes'):
         await tick(connection, function_name_depth=2)
         complex_samples = np.empty(samp_size, 'complex64')
@@ -117,7 +136,8 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
         if ((count % 1000) == 1) and (loud is False):
             if count > 10000:
                 (total, count) = (avg, 1)
-            sdr.set_center_freq(random.randrange(int(433.8e6), int(434e6), step = 10000))
+            center_frequency = get_new_center()
+            sdr.set_center_freq(center_frequency)
             logging.info("center frequency: %d" % (sdr.get_center_freq()))
         if total == 0:
             total = pwr
@@ -136,15 +156,16 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
                     block = np.concatenate(blocks)
                     size, dtype, compressed = compress(block)
                     info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                    await connection.set(timestamp, info)
-                    await connection.lpush('eof_timestamps', [timestamp])
-                    await connection.expireat(timestamp, int(timestamp+600))
-                    print('flushing:', {'duration': time.time()-timestamp, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
+                    await metapub(connection, 'eof_timestamps', timestamp, info)
+                    logging.info('flushing: %s' % {'duration': time.time()-timestamp, 'center_freq': center_frequency, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
+                    await connection.hincrby('good_block', center_frequency, 1)
                 else:
-                    print('short block')
+                    await connection.hincrby('short_block', center_frequency, 1)
+                    logging.debug('short block')
                 (blocks, loud) = ([], False)
                 gc.collect()
     return None
+
 
 def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.ndarray:
     beep_samples = decompress(**info)
@@ -262,7 +283,7 @@ def decode_pulses(pulses: np.ndarray) -> typing.Dict:
         for packet in demodulator(pulses):
             res = silver_sensor(packet)
             if 'uid' in res.keys():
-                logging.info(printer(packet.packet))
+                logging.debug(printer(packet.packet))
                 res['uid'] = (res['channel']+1*1024)+res['uid']
                 return res
     return {}
@@ -278,9 +299,7 @@ def try_decode(info: typing.Dict, timestamp = 0) -> typing.Dict:
 async def phase1_main() -> typing.Awaitable[None]:
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
-
     sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 9
-
     logging.info('streaming bytes...')
     await process_samples(sdr)
     await sdr.stop()
@@ -290,14 +309,8 @@ async def phase1_main() -> typing.Awaitable[None]:
 
 async def packetizer_main() -> typing.Awaitable[None]:
     connection = await init_redis()
-    while True:
+    async for (timestamp, info) in metasub(connection, 'eof_timestamps'):
         await tick(connection)
-        try:
-            timestamp = await connection.brpop(['eof_timestamps'], 360)
-            timestamp = timestamp.value
-            info = await connection.get(timestamp)
-        except:
-            info = {}
         if info in [{}, None]:
             decoded = {}
         else:
@@ -307,27 +320,23 @@ async def packetizer_main() -> typing.Awaitable[None]:
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
-            await connection.publish('sensor_readings', [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
-            await connection.publish('sensor_readings', [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
+            await metapub(connection, 'sensor_readings', None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
+            await metapub(connection, 'sensor_readings', None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', [timestamp])
             await connection.expire(timestamp, 120)
     return None
 
 async def logger_main() -> typing.Awaitable[None]:
     connection = await init_redis()
-    tick_connection = await init_redis()
     datastore = tsd.TimeSeriesDatastore()
     logging.info('connected to datastore')
-    subscription = await connection.start_subscribe()
-    await subscription.subscribe(['sensor_readings'])
-    while True:
-        reading = await subscription.next_published()
-        datastore.add_measurement(*(reading.value), raw=True)
-        await tick(tick_connection)
+    async for (_, measurement) in metasub(connection, 'sensor_readings'):
+        await tick(connection)
+        datastore.add_measurement(*measurement, raw=True)
     return None
 
 def spawner(function_or_coroutine):
-    logging.info('starting: ' + function_or_coroutine.__name__)
+    logging.debug('spawning: ' + function_or_coroutine.__name__)
     def callable_wrapper(main):
         if asyncio.iscoroutinefunction(main):
             loop = asyncio.get_event_loop()
@@ -345,7 +354,7 @@ async def monitor(redis_connection = None, threshold = 600, key = "sproutwave_ti
         now = time.time()
         ticks = await get_ticks(redis_connection, key=key)
         for name, timestamp in ticks.items():
-            print(now, name, timestamp)
+            logging.info("now: %d, name: %s, last_timestamp: %d" % (now, name, timestamp))
             if (now - timestamp) > 120 and name is not None:
                 if send_pipe is not None:
                     send_pipe.send(name)
