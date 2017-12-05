@@ -59,9 +59,9 @@ class TimeSeriesDatastore(object):
                 unit_tag = 0
             else:
                 unit_tag = -1
-        if type(value) != float:
+        if not isinstance(value, float):
             value = float(value)
-        if type(sensor_uid) != int:
+        if not isinstance(sensor_uid, int):
             sensor_id = int(sensor_id)
         inserter = "INSERT INTO readings VALUES(?, ?, ?, ?, ?)"
         data = (timestamp, sensor_uid, unit_tag, value, meta)
