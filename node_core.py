@@ -94,17 +94,16 @@ async def init_redis():
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     return connection
 
-async def tick(redis_connection, function_name_depth=1):
+async def tick(redis_connection, function_name_depth=1, key = 'sproutwave_ticks'):
     name = get_function_name(function_name_depth)
-    await redis_connection.hset('sproutwave_ticks', name, time.time())
+    await redis_connection.hset(key, name, time.time())
 
-async def get_ticks(connection = None):
+async def get_ticks(connection = None, key = 'sproutwave_ticks'):
     if connection == None:
         connection = await init_redis()
-    return await connection.hgetall_asdict('sproutwave_ticks')
+    return await connection.hgetall_asdict(key)
 
 async def process_samples(sdr) -> typing.Awaitable[None]:
-    logging.info('starting: ' + get_function_name())
     connection = await init_redis()
     block_size  = 512*64
     samp_size = block_size // 2
@@ -277,7 +276,6 @@ def try_decode(info: typing.Dict, timestamp = 0) -> typing.Dict:
     return {}
 
 async def phase1_main() -> typing.Awaitable[None]:
-    logging.info('starting: ' + get_function_name())
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
 
@@ -345,7 +343,7 @@ async def monitor(redis_connection = None, threshold = 600, key = "sproutwave_ti
         redis_connection = await init_redis()
     while True:
         now = time.time()
-        ticks = await get_ticks(redis_connection)
+        ticks = await get_ticks(redis_connection, key=key)
         for name, timestamp in ticks.items():
             print(now, name, timestamp)
             if (now - timestamp) > 120 and name is not None:
