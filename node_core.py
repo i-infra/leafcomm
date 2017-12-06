@@ -1,21 +1,15 @@
 import sys
-
-import numpy as np
-import bottleneck as bn
-
 import statistics
 import typing
 import multiprocessing
 import asyncio
 import time
-import gc
-import random
 import logging
-import json
 import base64
-
 import itertools as its
-import functools as f
+
+import numpy as np
+import bottleneck as bn
 
 import cbor
 import blosc
@@ -25,7 +19,7 @@ from asyncio_redis.encoders import BaseEncoder, BytesEncoder
 
 import ts_datastore as tsd
 
-logging.getLogger().setLevel(logging.DEBUG)
+logging.getLogger().setLevel(logging.INFO)
 
 FilterFunc = typing.Callable[[np.ndarray], np.ndarray]
 Info = typing.Dict
@@ -94,20 +88,23 @@ async def init_redis():
     connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
     return connection
 
-async def tick(redis_connection, function_name_depth=1, key = 'sproutwave_ticks'):
+async def tick(connection, function_name_depth=1, key = 'sproutwave_ticks'):
     name = get_function_name(function_name_depth)
-    await redis_connection.hset(key, name, time.time())
+    await connection.hset(key, name, time.time())
 
 async def get_ticks(connection = None, key = 'sproutwave_ticks'):
     if connection == None:
         connection = await init_redis()
     return await connection.hgetall_asdict(key)
 
-async def metapub(connection, channel, timestamp, info):
+async def metapub(connection, channels, timestamp, info):
+    if isinstance(channels, str):
+        channels = [channels]
     if timestamp == None:
         timestamp = time.time()
     await connection.set(timestamp, info)
-    await connection.lpush(channel, [timestamp])
+    for channel in channels:
+        await connection.lpush(channel, [timestamp])
     await connection.expireat(timestamp, int(timestamp+600))
 
 async def metasub(connection, channel):
@@ -118,17 +115,22 @@ async def metasub(connection, channel):
             info = await connection.get(timestamp)
         except:
             timestamp = info = None
+        await tick(connection, function_name_depth=2)
         yield (timestamp, info)
 
-async def process_samples(sdr) -> typing.Awaitable[None]:
+async def analog_to_block() -> typing.Awaitable[None]:
+    import gc
+    from rtlsdr import rtlsdraio
+    sdr = rtlsdraio.RtlSdrAio()
+    sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 9
     connection = await init_redis()
     block_size  = 512*64
     samp_size = block_size // 2
     (loud, blocks, total, count) = (False, [], 0,  1)
     center_frequency = 433.9e6
-    get_new_center = lambda: random.randrange(int(433.8e6), int(434e6), step = 10000)
+    get_new_center = lambda: int(433.8e6) + int(time.time()%20)*10000
     async for byte_samples in sdr.stream(block_size, format = 'bytes'):
-        await tick(connection, function_name_depth=2)
+        await tick(connection, function_name_depth=1)
         complex_samples = np.empty(samp_size, 'complex64')
         packed_bytes_to_iq(byte_samples, complex_samples)
         pwr = np.sum(np.abs(complex_samples))
@@ -164,11 +166,13 @@ async def process_samples(sdr) -> typing.Awaitable[None]:
                     logging.debug('short block')
                 (blocks, loud) = ([], False)
                 gc.collect()
+    await sdr.stop()
+    sdr.close()
     return None
 
 
-def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.ndarray:
-    beep_samples = decompress(**info)
+def block_to_pulses(compressed_block: Info, smoother: FilterFunc = brickwall) -> np.ndarray:
+    beep_samples = decompress(**compressed_block)
     shape = beep_samples.shape
     beep_absolute = np.empty(shape, dtype = 'float32')
     beep_absolute = np.abs(beep_samples)
@@ -178,7 +182,7 @@ def get_pulses_from_info(info: Info, smoother: FilterFunc = brickwall) -> np.nda
     pulses = rle(beep_binary)
     return np.array(pulses)
 
-def get_decile_durations(pulses: np.ndarray) -> Deciles:
+def pulses_to_deciles(pulses: np.ndarray) -> Deciles:
     values = np.unique(pulses.T[1])
     deciles = {}
     if len(pulses) < 10:
@@ -193,7 +197,7 @@ def get_decile_durations(pulses: np.ndarray) -> Deciles:
         deciles[value] = (short_decile, long_decile)
     return deciles
 
-def find_pulse_groups(pulses: np.ndarray, deciles: Deciles) -> typing.List[int]:
+def pulses_to_breaks(pulses: np.ndarray, deciles: Deciles) -> typing.List[int]:
     cutoff = min(deciles[0][0],deciles[1][0])*9
     breaks = np.logical_and(pulses.T[0] > cutoff, pulses.T[1] == L).nonzero()[0]
     break_deltas = np.diff(breaks)
@@ -213,10 +217,10 @@ def find_pulse_groups(pulses: np.ndarray, deciles: Deciles) -> typing.List[int]:
     return breaks
 
 def demodulator(pulses: np.ndarray) -> typing.Iterable[Packet]:
-    deciles = get_decile_durations(pulses)
+    deciles = pulses_to_deciles(pulses)
     if deciles == {}:
         return []
-    breaks = find_pulse_groups(pulses, deciles)
+    breaks = pulses_to_breaks(pulses, deciles)
     if len(breaks) == 0:
         return []
     for (x,y) in zip(breaks, breaks[1::]):
@@ -278,7 +282,7 @@ def silver_sensor(packet: Packet) -> typing.Dict:
     return {}
 
 
-def decode_pulses(pulses: np.ndarray) -> typing.Dict:
+def pulses_to_packet(pulses: np.ndarray) -> typing.Dict:
     if len(pulses) > 10:
         for packet in demodulator(pulses):
             res = silver_sensor(packet)
@@ -288,50 +292,76 @@ def decode_pulses(pulses: np.ndarray) -> typing.Dict:
                 return res
     return {}
 
-def try_decode(info: typing.Dict, timestamp = 0) -> typing.Dict:
-    for filter_func in filters:
-        pulses = get_pulses_from_info(info, filter_func)
-        decoded = decode_pulses(pulses)
-        if decoded != {}:
-            return decoded
-    return {}
-
-async def phase1_main() -> typing.Awaitable[None]:
-    from rtlsdr import rtlsdraio
-    sdr = rtlsdraio.RtlSdrAio()
-    sdr.rs, sdr.fc, sdr.gain = 256000, 433.9e6, 9
-    logging.info('streaming bytes...')
-    await process_samples(sdr)
-    await sdr.stop()
-    logging.info('Done')
-    sdr.close()
-    return None
-
-async def packetizer_main() -> typing.Awaitable[None]:
+async def block_to_packet() -> typing.Awaitable[None]:
+    import json
+    json.encoder.FLOAT_REPR = lambda o: format(o, '.2f')
     connection = await init_redis()
     async for (timestamp, info) in metasub(connection, 'eof_timestamps'):
-        await tick(connection)
-        if info in [{}, None]:
-            decoded = {}
+        if info is not None:
+            for filter_func in filters:
+                pulses = block_to_pulses(info, filter_func)
+                decoded = pulses_to_packet(pulses)
+                if decoded != {}:
+                    break
         else:
-            decoded = try_decode(info, timestamp)
-        logging.debug('packetizer decoded %s %s' % (base64.b64encode(cbor.dumps(timestamp)), json.dumps(decoded,)))
+            decoded = {}
+        logging.info('packetizer decoded %s %s' % (base64.b64encode(cbor.dumps(timestamp)), json.dumps(decoded,)))
         if decoded == {}:
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
-            await metapub(connection, 'sensor_readings', None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
-            await metapub(connection, 'sensor_readings', None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
+            await metapub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
+            await metapub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', [timestamp])
             await connection.expire(timestamp, 120)
     return None
 
-async def logger_main() -> typing.Awaitable[None]:
+def get_hardware_uid():
+    import nacl.hash, nacl.encoding
+    import glob
+    hashed = nacl.hash.sha512(open(glob.glob("/sys/block/mmcblk*/device/cid")[0], 'rb').read(), encoder=nacl.encoding.RawEncoder)
+    colour = open('uid/colours').read().split()[hashed[-1]>>4]
+    veggy = open('uid/veggies').read().split()[hashed[-1]&0xF]
+    human_name = "%s %s" % (colour, veggy)
+    return human_name, hashed
+
+def register_session_box():
+    import nacl.public
+    import urllib.request
+    relay_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x11\xd3U\xb0\xbc\xe0\xb32\x15t\xbb\xe49^Y\xbf2\x8dUo')
+    human_name, uid = get_hardware_uid()
+    logging.info('human name: %s' % human_name)
+    session_key = nacl.public.PrivateKey.generate()
+    identity_pair = [uid, session_key.public_key.encode()]
+    signed_message = nacl.public.SealedBox(relay_key).encrypt(cbor.dumps(identity_pair))
+    response = urllib.request.urlopen('https://data.sproutwave.com:8444/register', data=signed_message)
+    assert response.getcode() == 200
+    return uid, nacl.public.Box(session_key, relay_key)
+
+async def packet_to_upstream(loop=None, host='data.sproutwave.com', port=8019, box=None):
+    import socket
+    import zlib
+    if loop == None:
+        loop = asyncio.get_event_loop()
+    if box == None:
+        uid, box = register_session_box()
+    update_interval = 2
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    connection = await init_redis()
+    samples = {}
+    last_sent = time.time()
+    async for (_, reading) in metasub(connection, 'upstream_channel'):
+        if reading is not None:
+            samples[reading[1]+4096*reading[2]] = reading
+        if time.time() > (last_sent + update_interval):
+            update_samples = [x for x in samples.values()]
+            sock.sendto(box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, port))
+            last_sent = time.time()
+
+async def packet_to_datastore() -> typing.Awaitable[None]:
     connection = await init_redis()
     datastore = tsd.TimeSeriesDatastore()
-    logging.info('connected to datastore')
-    async for (_, measurement) in metasub(connection, 'sensor_readings'):
-        await tick(connection)
+    async for (_, measurement) in metasub(connection, 'datastore_channel'):
         datastore.add_measurement(*measurement, raw=True)
     return None
 
@@ -347,14 +377,14 @@ def spawner(function_or_coroutine):
     process.start()
     return process
 
-async def monitor(redis_connection = None, threshold = 600, key = "sproutwave_ticks", send_pipe = None):
-    if redis_connection == None:
-        redis_connection = await init_redis()
+async def watchdog(connection = None, threshold = 600, key = "sproutwave_ticks", send_pipe = None):
+    if connection == None:
+        connection = await init_redis()
     while True:
         now = time.time()
-        ticks = await get_ticks(redis_connection, key=key)
+        ticks = await get_ticks(connection, key=key)
         for name, timestamp in ticks.items():
-            logging.info("now: %d, name: %s, last_timestamp: %d" % (now, name, timestamp))
+            logging.info("name: %s, now: %d, last_timestamp: %d" % (name, now, timestamp))
             if (now - timestamp) > 120 and name is not None:
                 if send_pipe is not None:
                     send_pipe.send(name)
@@ -362,7 +392,7 @@ async def monitor(redis_connection = None, threshold = 600, key = "sproutwave_ti
         await asyncio.sleep(60 - (time.time()-now))
 
 def main():
-    funcs = (packetizer_main, phase1_main, logger_main)
+    funcs = (analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream)
     proc_mapping = {}
     while True:
         print(proc_mapping)
@@ -373,7 +403,7 @@ def main():
                 proc_mapping[name].terminate()
             proc_mapping[name] = spawner(func)
         time.sleep(30)
-        spawner(monitor).join()
+        spawner(watchdog).join()
 
 if __name__ == "__main__":
     main()
