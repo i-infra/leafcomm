@@ -160,10 +160,15 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                     await metapub(connection, 'eof_timestamps', timestamp, info)
                     logging.info('flushing: %s' % {'duration': time.time()-timestamp, 'center_freq': center_frequency, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
-                    await connection.hincrby('good_block', center_frequency, 1)
+                    now = await connection.hget('good_block', center_frequency)
+                    if now == None:
+                        now = 0
+                    await connection.hset('good_block', center_frequency, now+1)
                 else:
-                    await connection.hincrby('short_block', center_frequency, 1)
-                    logging.debug('short block')
+                    now = await connection.hget('short_block', center_frequency)
+                    if now == None:
+                        now = 0
+                    await connection.hset('short_block', center_frequency, now+1)
                 (blocks, loud) = ([], False)
                 gc.collect()
     await sdr.stop()
@@ -293,8 +298,6 @@ def pulses_to_packet(pulses: np.ndarray) -> typing.Dict:
     return {}
 
 async def block_to_packet() -> typing.Awaitable[None]:
-    import json
-    json.encoder.FLOAT_REPR = lambda o: format(o, '.2f')
     connection = await init_redis()
     async for (timestamp, info) in metasub(connection, 'eof_timestamps'):
         if info is not None:
@@ -305,11 +308,12 @@ async def block_to_packet() -> typing.Awaitable[None]:
                     break
         else:
             decoded = {}
-        logging.info('packetizer decoded %s %s' % (base64.b64encode(cbor.dumps(timestamp)), json.dumps(decoded,)))
         if decoded == {}:
+            logging.debug('packetizer decoded %s %s' % (base64.b64encode(cbor.dumps(timestamp)).decode(), decoded))
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
+            logging.info('packetizer decoded %s %s' % (base64.b64encode(cbor.dumps(timestamp)).decode(), decoded))
             await metapub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
             await metapub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', [timestamp])
@@ -377,6 +381,18 @@ def spawner(function_or_coroutine):
     process.start()
     return process
 
+async def band_monitor(connection = None):
+    if connection == None:
+        connection = await init_redis()
+    while True:
+        good_stats = await connection.hgetall_asdict('good_block')
+        for (freq,count) in sorted(good_stats.items()):
+            print("OK: %d\t%d" % (freq, count))
+        short_stats = await connection.hgetall_asdict('short_block')
+        for (freq,count) in sorted(short_stats.items()):
+            print("NO: %d\t%d" % (freq,count))
+        await asyncio.sleep(60)
+
 async def watchdog(connection = None, threshold = 600, key = "sproutwave_ticks", send_pipe = None):
     if connection == None:
         connection = await init_redis()
@@ -392,10 +408,9 @@ async def watchdog(connection = None, threshold = 600, key = "sproutwave_ticks",
         await asyncio.sleep(60 - (time.time()-now))
 
 def main():
-    funcs = (analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream)
+    funcs = (analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor)
     proc_mapping = {}
     while True:
-        print(proc_mapping)
         for func in funcs:
             name = func.__name__
             logging.info('(re)starting %s' % name)
