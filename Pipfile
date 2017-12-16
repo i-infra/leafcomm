@@ -1,0 +1,21 @@
+[[source]]
+
+url = "https://pypi.python.org/simple"
+verify_ssl = true
+name = "pypi"
+
+
+[packages]
+
+asyncio_redis = "*"
+cbor = "*"
+cffi = "*"
+numpy = "*"
+pyrtlsdr = "*"
+Cython = "*"
+PyNaCl = {git = "https://github.com/pyca/pynacl.git"}
+blosc = {git = "https://github.com/itdaniher/python-blosc.git"}
+
+
+[dev-packages]
+
