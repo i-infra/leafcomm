@@ -67,7 +67,7 @@
      pip: requirements={{code_path}}/requirements.txt virtualenv={{venv_path}}
      become: true
      become_user: sproutwave
-   - name: launch session
-     shell: screen -d -m {{venv_path}}/bin/python {{code_path}}/phase1.py
-     become: true
-     become_user: sproutwave
+   #- name: launch session
+   #  shell: screen -d -m {{venv_path}}/bin/python {{code_path}}/node_core.py
+   #  become: true
+   #  become_user: sproutwave
