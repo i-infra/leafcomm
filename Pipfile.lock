@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "a4436b4cf7966c3fe2eed45ed8a4bd715753cc5ff31050e8a074287c89f53764"
+            "sha256": "cfa664238025e7c9ef0e644efed8ac2c8dd543e9fce72407854c6791bb132958"
         },
         "host-environment-markers": {
             "implementation_name": "cpython",
@@ -35,7 +35,13 @@
             "version": "==0.14.3"
         },
         "blosc": {
-            "git": "https://github.com/itdaniher/python-blosc.git"
+            "git": "https://github.com/Blosc/python-blosc.git"
+        },
+        "bottleneck": {
+            "hashes": [
+                "sha256:6efcde5f830aed64feafca0359b51db0e184c72af8ba6675b4a99f263922eb36"
+            ],
+            "version": "==1.2.1"
         },
         "cbor": {
             "hashes": [

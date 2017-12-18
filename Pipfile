@@ -7,14 +7,15 @@ name = "pypi"
 
 [packages]
 
-asyncio_redis = "*"
+asyncio-redis = "*"
 cbor = "*"
 cffi = "*"
 numpy = "*"
 pyrtlsdr = "*"
-Cython = "*"
-PyNaCl = {git = "https://github.com/pyca/pynacl.git"}
-blosc = {git = "https://github.com/itdaniher/python-blosc.git"}
+cython = "*"
+pynacl = {git = "https://github.com/pyca/pynacl.git"}
+bottleneck = "*"
+blosc = {git = "https://github.com/Blosc/python-blosc.git"}
 
 
 [dev-packages]
