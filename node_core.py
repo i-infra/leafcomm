@@ -386,11 +386,12 @@ async def band_monitor(connection = None):
         connection = await init_redis()
     while True:
         good_stats = await connection.hgetall_asdict('good_block')
+        print("FREQ\t\tOK\tNO")
         for (freq,count) in sorted(good_stats.items()):
-            print("OK: %d\t%d" % (freq, count))
-        short_stats = await connection.hgetall_asdict('short_block')
-        for (freq,count) in sorted(short_stats.items()):
-            print("NO: %d\t%d" % (freq,count))
+            failed = await connection.hget('short_block', freq)
+            if failed == None:
+                failed = 0
+            print("%d\t%d\t%d" % (freq, count, failed))
         await asyncio.sleep(60)
 
 async def watchdog(connection = None, threshold = 600, key = "sproutwave_ticks", send_pipe = None):
