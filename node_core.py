@@ -128,7 +128,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
     samp_size = block_size // 2
     (loud, blocks, total, count) = (False, [], 0,  1)
     center_frequency = 433.9e6
-    get_new_center = lambda: int(433.8e6) + int(time.time()%20)*10000
+    get_new_center = lambda: int(433.8e6) + (int(time.time()*10)%10)*20000
     async for byte_samples in sdr.stream(block_size, format = 'bytes'):
         await tick(connection, function_name_depth=1)
         complex_samples = np.empty(samp_size, 'complex64')
