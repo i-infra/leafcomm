@@ -1,0 +1,7 @@
+[opz:vars]
+ansible_python_interpreter=/usr/bin/python3
+ansible_user=root
+ansible_ssh_private_key_file=sproutwave_admin
+timeout=60
+[opz]
+<IP GOES HERE>
