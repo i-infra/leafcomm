@@ -1,0 +1,10 @@
+asyncio-redis==0.14.3
+bottleneck==1.2.1
+cbor==1.0.0
+cffi==1.11.2
+cython==0.27.3
+numpy==1.13.3
+pycparser==2.18
+pyrtlsdr==0.2.7
+git+https://github.com/Blosc/python-blosc.git#egg=blosc
+git+https://github.com/pyca/pynacl.git#egg=pynacl
