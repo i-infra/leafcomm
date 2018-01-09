@@ -1,4 +1,23 @@
-Broccoli
+colours = """Burgendy
+Magenta
+Maroon
+Ruby
+Red
+Crimson
+Amber
+Golden
+Yellow
+Green
+Cyan
+Turquoise
+Blue
+Teal
+Indigo
+Fuschsia
+Violet
+White
+Tawny""".split()
+vegetables = """Broccoli
 Eggplant
 Parsnip
 Spinach
@@ -33,4 +52,4 @@ Cucumber
 Cauliflower
 Beets
 Squash
-Pea
+Pea""".split()
