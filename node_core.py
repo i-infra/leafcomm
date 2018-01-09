@@ -1,3 +1,4 @@
+import os
 import sys
 import statistics
 import typing
@@ -323,9 +324,10 @@ async def block_to_packet() -> typing.Awaitable[None]:
 def get_hardware_uid():
     import nacl.hash, nacl.encoding
     import glob
+    import colourful_vegetables
     hashed = nacl.hash.sha512(open(glob.glob("/sys/block/mmcblk*/device/cid")[0], 'rb').read(), encoder=nacl.encoding.RawEncoder)
-    colour = open('uid/colours').read().split()[hashed[-1]>>4]
-    veggy = open('uid/veggies').read().split()[hashed[-1]&0xF]
+    colour = colourful_vegetables.colours[hashed[-1]>>4]
+    veggy = colourful_vegetables.vegetables[hashed[-1]&0xF]
     human_name = "%s %s" % (colour, veggy)
     return human_name, hashed
 
@@ -364,9 +366,11 @@ async def packet_to_upstream(loop=None, host='data.sproutwave.com', port=8019, b
 
 async def packet_to_datastore() -> typing.Awaitable[None]:
     connection = await init_redis()
-    datastore = tsd.TimeSeriesDatastore()
+    datastore = tsd.TimeSeriesDatastore(db_name='sproutwave_v1.db')
+    sys.stderr.write(datastore.db_name+'\n')
     async for (_, measurement) in metasub(connection, 'datastore_channel'):
-        datastore.add_measurement(*measurement, raw=True)
+        if measurement is not None:
+            datastore.add_measurement(*measurement, raw=True)
     return None
 
 def spawner(function_or_coroutine):
@@ -408,7 +412,16 @@ async def watchdog(connection = None, threshold = 600, key = "sproutwave_ticks",
                 return None
         await asyncio.sleep(60 - (time.time()-now))
 
+def diag():
+    print('pyvers: %s' % sys.hexversion)
+    print('exec: %s' % sys.executable)
+    print('pid: %d' % os.getpid())
+    print('cwd: %s' % os.getcwd())
+    print('prefix: %s' % sys.exec_prefix)
+    print('sys.path: %s' % sys.path)
+
 def main():
+    diag()
     funcs = (analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor)
     proc_mapping = {}
     while True:

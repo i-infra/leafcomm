@@ -1,5 +1,6 @@
 import sqlite3 as sql
 import time
+import tempfile
 
 # TODO: use pint to refine this?
 # used in meta tag to modify the set of compound units
@@ -17,7 +18,11 @@ del i, unit
 
 class TimeSeriesDatastore(object):
 
-    def __init__(self, db_name = 'sproutwave_v1.db'):
+    def __init__(self, db_name = 'time_series_datastore_v1.db'):
+        if db_name[0] != '/':
+            temp_log_dir = tempfile.mkdtemp(prefix = 'tsd-', dir='/tmp')
+            db_name = temp_log_dir+'/'+db_name
+        self.db_name = db_name
         self.conn = sql.connect(db_name)
         init_readings = 'CREATE TABLE IF NOT EXISTS readings (Timestamp REAL, Sensor INT, Units INT, Value REAL, Meta TEXT)'
         self.conn.execute(init_readings)
