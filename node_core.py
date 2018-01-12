@@ -3,6 +3,7 @@ import sys
 import statistics
 import typing
 import multiprocessing
+import subprocess
 import asyncio
 import time
 import logging
@@ -86,7 +87,7 @@ def packed_bytes_to_iq(samples: bytes, out = None) -> typing.Union[None, np.ndar
         return True
 
 async def init_redis():
-    connection = await asyncio_redis.Connection.create('localhost', 6379, encoder = CborEncoder())
+    connection = await asyncio_redis.Connection.create('localhost', 6380, encoder = CborEncoder())
     return connection
 
 async def tick(connection, function_name_depth=1, key = 'sproutwave_ticks'):
@@ -341,7 +342,8 @@ def register_session_box():
     identity_pair = [uid, session_key.public_key.encode()]
     signed_message = nacl.public.SealedBox(relay_key).encrypt(cbor.dumps(identity_pair))
     response = urllib.request.urlopen('https://data.sproutwave.com:8444/register', data=signed_message)
-    assert response.getcode() == 200
+    if response.getcode() == 200:
+        raise Exception("sproutwave session key setup failed")
     return uid, nacl.public.Box(session_key, relay_key)
 
 async def packet_to_upstream(loop=None, host='data.sproutwave.com', port=8019, box=None):
@@ -420,8 +422,20 @@ def diag():
     print('prefix: %s' % sys.exec_prefix)
     print('sys.path: %s' % sys.path)
 
+def start_redis_server():
+    try:
+        # check for running redis
+        os.kill(int(open('/tmp/redis-server.pid', 'r').read()), 0)
+    except:
+        redis = subprocess.Popen(['redis-server', '-'], stdin=subprocess.PIPE)
+        ldir = os.path.dirname(os.path.realpath(__file__))
+        rconf = ldir+'/redis.conf'
+        print(rconf)
+        redis.stdin.write(open(rconf, 'rb').read())
+
 def main():
     diag()
+    spawner(start_redis_server).join()
     funcs = (analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor)
     proc_mapping = {}
     while True:
