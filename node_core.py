@@ -99,7 +99,7 @@ async def get_ticks(connection = None, key = 'sproutwave_ticks'):
         connection = await init_redis()
     return await connection.hgetall_asdict(key)
 
-async def metapub(connection, channels, timestamp, info):
+async def pseudopub(connection, channels, timestamp, info):
     if isinstance(channels, str):
         channels = [channels]
     if timestamp == None:
@@ -109,16 +109,19 @@ async def metapub(connection, channels, timestamp, info):
         await connection.lpush(channel, [timestamp])
     await connection.expireat(timestamp, int(timestamp+600))
 
-async def metasub(connection, channel):
+async def pseudosub(connection, channel, timeout=360):
     while True:
-        try:
-            timestamp = await connection.brpop([channel], 360)
-            timestamp = timestamp.value
-            info = await connection.get(timestamp)
-        except:
-            timestamp = info = None
-        await tick(connection, function_name_depth=2)
-        yield (timestamp, info)
+        yield await pseudosub1(connection, channel, timeout)
+
+async def pseudosub1(connection, channel, timeout):
+    try:
+        timestamp = await connection.brpop([channel], timeout)
+        timestamp = timestamp.value
+        info = await connection.get(timestamp)
+    except:
+        timestamp = info = None
+    await tick(connection, function_name_depth=3)
+    return (timestamp, info)
 
 async def analog_to_block() -> typing.Awaitable[None]:
     import gc
@@ -160,7 +163,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     block = np.concatenate(blocks)
                     size, dtype, compressed = compress(block)
                     info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                    await metapub(connection, 'eof_timestamps', timestamp, info)
+                    await pseudopub(connection, 'eof_timestamps', timestamp, info)
                     logging.info('flushing: %s' % {'duration': time.time()-timestamp, 'center_freq': center_frequency, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
                     now = await connection.hget('good_block', center_frequency)
                     if now == None:
@@ -301,7 +304,7 @@ def pulses_to_packet(pulses: np.ndarray) -> typing.Dict:
 
 async def block_to_packet() -> typing.Awaitable[None]:
     connection = await init_redis()
-    async for (timestamp, info) in metasub(connection, 'eof_timestamps'):
+    async for (timestamp, info) in pseudosub(connection, 'eof_timestamps'):
         if info is not None:
             for filter_func in filters:
                 pulses = block_to_pulses(info, filter_func)
@@ -316,8 +319,8 @@ async def block_to_packet() -> typing.Awaitable[None]:
             await connection.sadd('nontrivial_timestamps', [timestamp])
         else:
             logging.info('packetizer decoded %s %s' % (base64.b64encode(cbor.dumps(timestamp)).decode(), decoded))
-            await metapub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
-            await metapub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
+            await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
+            await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', [timestamp])
             await connection.expire(timestamp, 120)
     return None
@@ -358,7 +361,7 @@ async def packet_to_upstream(loop=None, host='data.sproutwave.com', port=8019, b
     connection = await init_redis()
     samples = {}
     last_sent = time.time()
-    async for (_, reading) in metasub(connection, 'upstream_channel'):
+    async for (_, reading) in pseudosub(connection, 'upstream_channel'):
         if reading is not None:
             samples[reading[1]+4096*reading[2]] = reading
         if time.time() > (last_sent + update_interval):
@@ -370,7 +373,7 @@ async def packet_to_datastore() -> typing.Awaitable[None]:
     connection = await init_redis()
     datastore = tsd.TimeSeriesDatastore(db_name='sproutwave_v1.db')
     sys.stderr.write(datastore.db_name+'\n')
-    async for (_, measurement) in metasub(connection, 'datastore_channel'):
+    async for (_, measurement) in pseudosub(connection, 'datastore_channel'):
         if measurement is not None:
             datastore.add_measurement(*measurement, raw=True)
     return None
