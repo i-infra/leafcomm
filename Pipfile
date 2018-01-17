@@ -16,6 +16,7 @@ cython = "*"
 pynacl = {git = "https://github.com/pyca/pynacl.git"}
 bottleneck = "*"
 blosc = {git = "https://github.com/Blosc/python-blosc.git"}
+aiohttp = "*"
 
 
 [dev-packages]

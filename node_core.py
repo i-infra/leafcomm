@@ -113,14 +113,15 @@ async def pseudosub(connection, channel, timeout=360):
     while True:
         yield await pseudosub1(connection, channel, timeout)
 
-async def pseudosub1(connection, channel, timeout):
+async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):
     try:
         timestamp = await connection.brpop([channel], timeout)
         timestamp = timestamp.value
         info = await connection.get(timestamp)
     except:
         timestamp = info = None
-    await tick(connection, function_name_depth=3)
+    if do_tick == True:
+        await tick(connection, function_name_depth=depth)
     return (timestamp, info)
 
 async def analog_to_block() -> typing.Awaitable[None]:
@@ -135,7 +136,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
     center_frequency = 433.9e6
     get_new_center = lambda: int(433.8e6) + (int(time.time()*10)%10)*20000
     async for byte_samples in sdr.stream(block_size, format = 'bytes'):
-        await tick(connection, function_name_depth=1)
+        await tick(connection)
         complex_samples = np.empty(samp_size, 'complex64')
         packed_bytes_to_iq(byte_samples, complex_samples)
         pwr = np.sum(np.abs(complex_samples))
@@ -335,7 +336,7 @@ def get_hardware_uid():
     human_name = "%s %s" % (colour, veggy)
     return human_name, hashed
 
-def register_session_box():
+def register_session_box(base_url = "http://localhost:8019"):
     import nacl.public
     import urllib.request
     relay_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x11\xd3U\xb0\xbc\xe0\xb32\x15t\xbb\xe49^Y\xbf2\x8dUo')
@@ -344,18 +345,19 @@ def register_session_box():
     session_key = nacl.public.PrivateKey.generate()
     identity_pair = [uid, session_key.public_key.encode()]
     signed_message = nacl.public.SealedBox(relay_key).encrypt(cbor.dumps(identity_pair))
-    response = urllib.request.urlopen('https://data.sproutwave.com:8444/register', data=signed_message)
-    if response.getcode() == 200:
+    response = urllib.request.urlopen(base_url+'/register', data=signed_message)
+    print(response, response.getcode())
+    if response.getcode() != 200:
         raise Exception("sproutwave session key setup failed")
     return uid, nacl.public.Box(session_key, relay_key)
 
-async def packet_to_upstream(loop=None, host='data.sproutwave.com', port=8019, box=None):
+async def packet_to_upstream(loop=None, host='localhost', port=8019, box=None, devel=False):
     import socket
     import zlib
     if loop == None:
         loop = asyncio.get_event_loop()
     if box == None:
-        uid, box = register_session_box()
+        uid, box = register_session_box(base_url = 'http://%s:%d' % (host, port))
     update_interval = 2
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     connection = await init_redis()
