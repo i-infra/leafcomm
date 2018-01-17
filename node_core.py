@@ -352,7 +352,6 @@ def register_session_box(base_url = "http://localhost:8019"):
     logging.info('human name: %s' % human_name)
     signed_message, session_box = box_semisealed(uid, relay_public_key)
     response = urllib.request.urlopen(base_url+'/register', data=signed_message)
-    print(response, response.getcode())
     if response.getcode() != 200:
         raise Exception("sproutwave session key setup failed")
     return uid, session_box
@@ -441,7 +440,7 @@ def start_redis_server():
         redis = subprocess.Popen(['redis-server', '-'], stdin=subprocess.PIPE)
         ldir = os.path.dirname(os.path.realpath(__file__))
         rconf = ldir+'/redis.conf'
-        print(rconf)
+        logging.info('launching redis with conf: %s' % rconf)
         redis.stdin.write(open(rconf, 'rb').read())
 
 def main():
