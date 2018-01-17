@@ -1,5 +1,5 @@
 from node_core import *
-
+import ssl
 import zlib
 import json
 import aiohttp
@@ -22,10 +22,10 @@ class ProxyDatagramProtocol(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data, addr):
-        logging.debug(data)
         self.loop.create_task(pseudopub(self.connection, ['udp_inbound'], None, data))
 
 async def init_ws(request):
+    logging.debug('ws request started')
     redis_connection = request.app['connection']
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -53,13 +53,13 @@ async def init_ws(request):
             ws.send_str(json_bytes)
     return ws
 
-def unbox_semisealed(byte_blob):
+def unbox_semisealed(byte_blob, secret_key = relay_secret_key):
     ppk = byte_blob[:32]
     pk = nacl.public.PublicKey(ppk)
     boxed_contents = byte_blob[32:]
-    return ppk, nacl.public.Box(relay_secret_key, pk).decrypt(boxed_contents)
+    return ppk, nacl.public.Box(secret_key, pk).decrypt(boxed_contents)
 
-async def register(request):
+async def register_node(request):
     connection = request.app['connection']
     posted_bytes = await request.read()
     pubkey_bytes, uid = unbox_semisealed(posted_bytes)
@@ -69,13 +69,15 @@ async def register(request):
 async def signup(request):
     connection = request.app['connection']
     posted_bytes = await request.read()
-    cbor.loads(posted_bytes)
+    msg = cbor.loads(posted_bytes)
+    return web.json_response(msg)
 
 def create_app(loop):
     app = web.Application()
     app['redis_connection'] = None
     app.router.add_get('/ws', init_ws)
-    app.router.add_post('/register', register)
+    app.router.add_post('/register', register_node)
+    app.router.add_post('/signup', signup)
     return app
 
 if __name__ == "__main__":
@@ -86,4 +88,7 @@ if __name__ == "__main__":
     app['connection'] = loop.run_until_complete(asyncio.ensure_future(init_redis()))
     protocol = ProxyDatagramProtocol(loop, loop.run_until_complete(asyncio.ensure_future(init_redis())))
     loop.create_task(loop.create_datagram_endpoint(lambda: protocol, local_addr=('0.0.0.0', 8019)))
-    web.run_app(app, host = '127.0.0.1', port = 8019)
+    context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    context.load_cert_chain(certfile="fullchain.pem", keyfile="privkey.pem")
+    context.set_ciphers('RSA')
+    web.run_app(app, host = '127.0.0.1', port = 8019, ssl_context=context)

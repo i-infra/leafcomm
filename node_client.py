@@ -6,10 +6,14 @@ async def test_ws():
         human_name, uid = get_hardware_uid()
         test_ws.send_bytes(uid)
         while True:
-            msg = await test_ws.receive()#timeout=1)
+            msg = await test_ws.receive()
             if msg.type in [aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING]:
+                print(msg)
                 break
             else:
                 print(msg)
-
-spawner(test_ws).join()
+while True:
+    try:
+        spawner(test_ws).join()
+    except KeyboardInterrupt:
+        break
