@@ -2,7 +2,7 @@ from node_proxy import *
 
 async def test_ws():
     with aiohttp.client.ClientSession() as client:
-        test_ws = await client.ws_connect('http://localhost:8019/ws')
+        test_ws = await client.ws_connect('https://data.sproutwave.com:8444/ws')
         human_name, uid = get_hardware_uid()
         test_ws.send_bytes(uid)
         while True:

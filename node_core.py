@@ -336,28 +336,34 @@ def get_hardware_uid():
     human_name = "%s %s" % (colour, veggy)
     return human_name, hashed
 
+def box_semisealed(to_box):
+    import nacl
+    relay_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x11\xd3U\xb0\xbc\xe0\xb32\x15t\xbb\xe49^Y\xbf2\x8dUo')
+    session_key = nacl.public.PrivateKey.generate()
+    session_box = nacl.public.Box(session_key, relay_key)
+    nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
+    boxed = session_box.encrypt(to_box, nonce)
+    return session_key.public_key.encode()+boxed, session_box
+
 def register_session_box(base_url = "http://localhost:8019"):
     import nacl.public
     import urllib.request
-    relay_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x11\xd3U\xb0\xbc\xe0\xb32\x15t\xbb\xe49^Y\xbf2\x8dUo')
     human_name, uid = get_hardware_uid()
     logging.info('human name: %s' % human_name)
-    session_key = nacl.public.PrivateKey.generate()
-    identity_pair = [uid, session_key.public_key.encode()]
-    signed_message = nacl.public.SealedBox(relay_key).encrypt(cbor.dumps(identity_pair))
+    signed_message, session_box = box_semisealed(uid)
     response = urllib.request.urlopen(base_url+'/register', data=signed_message)
     print(response, response.getcode())
     if response.getcode() != 200:
         raise Exception("sproutwave session key setup failed")
-    return uid, nacl.public.Box(session_key, relay_key)
+    return uid, session_box
 
-async def packet_to_upstream(loop=None, host='localhost', port=8019, box=None, devel=False):
+async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=8019, https_port=8444, box=None):
     import socket
     import zlib
     if loop == None:
         loop = asyncio.get_event_loop()
     if box == None:
-        uid, box = register_session_box(base_url = 'http://%s:%d' % (host, port))
+        uid, box = register_session_box(base_url = 'https://%s:%d' % (host, https_port))
     update_interval = 2
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     connection = await init_redis()
@@ -368,7 +374,7 @@ async def packet_to_upstream(loop=None, host='localhost', port=8019, box=None, d
             samples[reading[1]+4096*reading[2]] = reading
         if time.time() > (last_sent + update_interval):
             update_samples = [x for x in samples.values()]
-            sock.sendto(box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, port))
+            sock.sendto(box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, udp_port))
             last_sent = time.time()
 
 async def packet_to_datastore() -> typing.Awaitable[None]:

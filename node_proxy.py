@@ -9,7 +9,7 @@ import nacl.public
 
 logging.getLogger().setLevel(logging.DEBUG)
 
-relay_key = nacl.public.PrivateKey(b'\x8fw\xadU\xb6\x0bD\xd1\xbf>Q\xfa\xf5>9\xc4)\x0b\x11\xc8\xf9\x0e\xa3\x14\x14~:\x87\xa4\x12\x15.')
+relay_secret_key = nacl.public.PrivateKey(b'\x8fw\xadU\xb6\x0bD\xd1\xbf>Q\xfa\xf5>9\xc4)\x0b\x11\xc8\xf9\x0e\xa3\x14\x14~:\x87\xa4\x12\x15.')
 
 class ProxyDatagramProtocol(asyncio.DatagramProtocol):
 
@@ -33,7 +33,7 @@ async def init_ws(request):
     uid = msg.data
     pub_key_bytes = await redis_connection.hget('identities', uid)
     pub_key = nacl.public.PublicKey(pub_key_bytes)
-    box = nacl.public.Box(relay_key, pub_key)
+    box = nacl.public.Box(relay_secret_key, pub_key)
     while True:
         ws_closed = False
         ts, udp_bytes = await pseudosub1(redis_connection, 'udp_inbound', do_tick=False)
@@ -53,16 +53,23 @@ async def init_ws(request):
             ws.send_str(json_bytes)
     return ws
 
+def unbox_semisealed(byte_blob):
+    ppk = byte_blob[:32]
+    pk = nacl.public.PublicKey(ppk)
+    boxed_contents = byte_blob[32:]
+    return ppk, nacl.public.Box(relay_secret_key, pk).decrypt(boxed_contents)
+
 async def register(request):
     connection = request.app['connection']
     posted_bytes = await request.read()
-    new_identity = nacl.public.SealedBox(relay_key).decrypt(posted_bytes)
-    if new_identity is not None:
-        uid, pubkey_bytes = tuple(cbor.loads(new_identity))
-        await connection.hset('identities', uid, pubkey_bytes)
-        return web.Response(status=200)
-    return web.Response(status=403)
+    pubkey_bytes, uid = unbox_semisealed(posted_bytes)
+    await connection.hset('identities', uid, pubkey_bytes)
+    return web.Response(status=200)
 
+async def signup(request):
+    connection = request.app['connection']
+    posted_bytes = await request.read()
+    cbor.loads(posted_bytes)
 
 def create_app(loop):
     app = web.Application()
@@ -71,16 +78,12 @@ def create_app(loop):
     app.router.add_post('/register', register)
     return app
 
-
 if __name__ == "__main__":
     diag()
     spawner(start_redis_server).join()
     loop = asyncio.get_event_loop()
     app = create_app(loop)
-    connection1 = loop.run_until_complete(asyncio.ensure_future(init_redis()))
-    connection2 = loop.run_until_complete(asyncio.ensure_future(init_redis()))
-    app['connection'] = connection1
-    protocol = ProxyDatagramProtocol(loop, connection2)
-    loop.create_task(loop.create_datagram_endpoint(
-        lambda: protocol, local_addr=('0.0.0.0', 8019)))
+    app['connection'] = loop.run_until_complete(asyncio.ensure_future(init_redis()))
+    protocol = ProxyDatagramProtocol(loop, loop.run_until_complete(asyncio.ensure_future(init_redis())))
+    loop.create_task(loop.create_datagram_endpoint(lambda: protocol, local_addr=('0.0.0.0', 8019)))
     web.run_app(app, host = '127.0.0.1', port = 8019)
