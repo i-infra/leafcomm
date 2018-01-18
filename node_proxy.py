@@ -91,4 +91,4 @@ if __name__ == "__main__":
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     context.load_cert_chain(certfile=local_dir+"/resources/fullchain.pem", keyfile=local_dir+"/resources/privkey.pem")
     context.set_ciphers('RSA')
-    web.run_app(app, host = '127.0.0.1', port = 8019, ssl_context=context)
+    web.run_app(app, host = '0.0.0.0', port = 8019, ssl_context=context)
