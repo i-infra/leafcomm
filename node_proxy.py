@@ -89,6 +89,6 @@ if __name__ == "__main__":
     protocol = ProxyDatagramProtocol(loop, loop.run_until_complete(asyncio.ensure_future(init_redis())))
     loop.create_task(loop.create_datagram_endpoint(lambda: protocol, local_addr=('0.0.0.0', 8019)))
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    context.load_cert_chain(certfile="fullchain.pem", keyfile="privkey.pem")
+    context.load_cert_chain(certfile=local_dir+"/resources/fullchain.pem", keyfile=local_dir+"/resources/privkey.pem")
     context.set_ciphers('RSA')
     web.run_app(app, host = '127.0.0.1', port = 8019, ssl_context=context)

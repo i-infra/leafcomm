@@ -40,6 +40,8 @@ printer = lambda xs: ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
 debinary = lambda ba: sum([x*(2**i) for (i,x) in enumerate(reversed(ba))])
 brickwall = lambda xs: bn.move_mean(xs, 32, 1)
 
+local_dir = os.path.dirname(os.path.realpath(__file__))
+
 try:
     import scipy
     from scipy.signal import butter, lfilter, freqz
@@ -437,11 +439,9 @@ def start_redis_server():
         # check for running redis
         os.kill(int(open('/tmp/redis-server.pid', 'r').read()), 0)
     except:
-        redis = subprocess.Popen(['redis-server', '-'], stdin=subprocess.PIPE)
-        ldir = os.path.dirname(os.path.realpath(__file__))
-        rconf = ldir+'/redis.conf'
+        rconf = local_dir+'/resources/redis.conf'
         logging.info('launching redis with conf: %s' % rconf)
-        redis.stdin.write(open(rconf, 'rb').read())
+        redis = subprocess.Popen(['redis-server', rconf])
 
 def main():
     diag()
