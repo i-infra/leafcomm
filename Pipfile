@@ -11,7 +11,7 @@ asyncio-redis = "*"
 cbor = "*"
 cffi = "*"
 numpy = "*"
-pyrtlsdr = {git = "https://github.com/itdaniher/pyrtlsdr.git"}
+pyrtlsdr = {git = "https://github.com/roger-/pyrtlsdr.git"}
 cython = "*"
 pynacl = {git = "https://github.com/pyca/pynacl.git"}
 bottleneck = "*"
