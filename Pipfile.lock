@@ -1,18 +1,18 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "a9a7183360f4b7efa42cccdbddb50c14c33a2b6b277471fd9d99632eedf8f443"
+            "sha256": "3a9863522456b160c375a7c79ccf0063edf24b9343963ce7099e0507e7784227"
         },
         "host-environment-markers": {
             "implementation_name": "cpython",
-            "implementation_version": "3.6.3",
+            "implementation_version": "3.6.4",
             "os_name": "posix",
             "platform_machine": "aarch64",
             "platform_python_implementation": "CPython",
             "platform_release": "4.4.77-rk3328",
             "platform_system": "Linux",
             "platform_version": "#29 SMP Mon Nov 20 03:26:28 CET 2017",
-            "python_full_version": "3.6.3",
+            "python_full_version": "3.6.4+",
             "python_version": "3.6",
             "sys_platform": "linux"
         },
@@ -29,6 +29,8 @@
     "default": {
         "aiohttp": {
             "hashes": [
+                "sha256:2d3ca44e2f2d989b6f19c36aac961a221c5ee872ac72290dd56abf25173e79cf",
+                "sha256:cf559687b8a180e2dda9cb6f638c99861c1e927f4a27515c57cba275ae268c7a",
                 "sha256:713367b92972744d4a7380afc4365f524a490483713cbb9e656060901574c528",
                 "sha256:59788ebe966a4f38f0024fe4174dcdc7dff322d830cf57c84fc86ddbf52428ae",
                 "sha256:796799259fe67ea08eeb19c943413bb56f928baab6ed8b2f277ed8e6e7af2d3d",
@@ -37,6 +39,7 @@
                 "sha256:ba1114b9920db85ec3197a7f6a60d2e97c411d302226cf2425f8ff3fcbee4b3e",
                 "sha256:2569c8a84ed26dd33f5c66073029e65138c2d91231c311260802e48ec1beadb8",
                 "sha256:27e8816bb5315c3c70e9e39ac9bfe1479f1f59d40f9d1897a7965485357b1b8a",
+                "sha256:4365c3bc108369829f9dcc10ad07d7858a1a46cbf94029beaf2eaff528d7e707",
                 "sha256:29e0f033a8756278f451b85b5f224f6cf466a998ea180049a4ea1a8105954dde",
                 "sha256:9be7abece545b6f70df62cd80e933191d3a1401186e4fd3e34a6dc9af11337ea",
                 "sha256:cca71a105218f45b15cac5be4a6b823cb09fe48774ff8359ae719bec29967752",
@@ -219,7 +222,7 @@
             "git": "https://github.com/pyca/pynacl.git"
         },
         "pyrtlsdr": {
-            "git": "https://github.com/itdaniher/pyrtlsdr.git"
+            "git": "https://github.com/roger-/pyrtlsdr.git"
         },
         "yarl": {
             "hashes": [
