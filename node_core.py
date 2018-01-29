@@ -7,8 +7,10 @@ import subprocess
 import asyncio
 import time
 import logging
+import pprint
 import base64
-import itertools as its
+import pathlib
+import itertools
 
 import numpy as np
 import bottleneck as bn
@@ -21,7 +23,6 @@ from asyncio_redis.encoders import BaseEncoder, BytesEncoder
 
 import ts_datastore as tsd
 
-logging.getLogger().setLevel(logging.INFO)
 
 FilterFunc = typing.Callable[[np.ndarray], np.ndarray]
 Info = typing.Dict
@@ -30,9 +31,9 @@ Packet = typing.NamedTuple('Packet', [('packet', list), ('errors', list), ('deci
 
 complex_to_stereo = lambda a: np.dstack((a.real, a.imag))[0]
 stereo_to_complex = lambda a: a[0] + a[1]*1j
-rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in its.groupby(xs, lambda x: x[1])]
-rle = lambda xs: [(len(list(gp)), x) for x, gp in its.groupby(xs)]
-rld = lambda xs: its.chain.from_iterable(its.repeat(x, n) for n, x in xs)
+rerle = lambda xs: [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
+rle = lambda xs: [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
+rld = lambda xs: itertools.chain.from_iterable(itertools.repeat(x, n) for n, x in xs)
 get_function_name = lambda depth=0: sys._getframe(depth + 1).f_code.co_name
 (L,H,E) = (0,1,2)
 
@@ -167,7 +168,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     size, dtype, compressed = compress(block)
                     info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                     await pseudopub(connection, 'eof_timestamps', timestamp, info)
-                    logging.info('flushing: %s' % {'duration': time.time()-timestamp, 'center_freq': center_frequency, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
+                    logging.debug('flushing: %s' % {'duration': time.time()-timestamp, 'center_freq': center_frequency, 'block_count': len(blocks), 'block_power': np.sum(np.abs(block))/len(blocks), 'avg': avg, 'lifetime_blocks': count})
                     now = await connection.hget('good_block', center_frequency)
                     if now == None:
                         now = 0
@@ -264,7 +265,7 @@ def silver_sensor(packet: Packet) -> typing.Dict:
         # "TTTT=Binär in Dez., Dez als HEX, HEX in Dez umwandeln (zB 0010=2Dez, 2Dez=2 Hex) 0010=2 1001=9 0110=6 => 692 HEX = 1682 Dez = >1+6= 7 UND 82 = 782°F"
         if len(bits) == 42:
             fields = [0,2,8,2,2,4,4,4,4,4,8]
-            fields = [x for x in its.accumulate(fields)]
+            fields = [x for x in itertools.accumulate(fields)]
             results = [debinary(bits[x:y]) for (x,y) in zip(fields, fields[1:])]
             if results[1] == 255:
                 return {}
@@ -279,7 +280,7 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             return {'uid':results[1], 'temperature': temp, 'humidity': humidity, 'channel':results[3]}#, 'metameta': packet.__dict__}
         elif len(bits) == 36:
             fields = [0] + [4]*9
-            fields = [x for x in its.accumulate(fields)]
+            fields = [x for x in itertools.accumulate(fields)]
             n = [debinary(bits[x:y]) for (x,y) in zip(fields, fields[1:])]
             model = n[0]
             uid = n[1] << 4 | n[2]
@@ -375,12 +376,15 @@ async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=801
             samples[reading[1]+4096*reading[2]] = reading
         if time.time() > (last_sent + update_interval):
             update_samples = [x for x in samples.values()]
+            logging.info(pprint.pformat(update_samples))
             sock.sendto(box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, udp_port))
             last_sent = time.time()
 
 async def packet_to_datastore() -> typing.Awaitable[None]:
     connection = await init_redis()
-    datastore = tsd.TimeSeriesDatastore(db_name='sproutwave_v1.db')
+    data_dir = os.path.expanduser("~/.sproutwave/")
+    pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
+    datastore = tsd.TimeSeriesDatastore(db_name=data_dir+'sproutwave_v1.db')
     sys.stderr.write(datastore.db_name+'\n')
     async for (_, measurement) in pseudosub(connection, 'datastore_channel'):
         if measurement is not None:
@@ -436,7 +440,6 @@ def diag():
 
 def start_redis_server():
     try:
-        # check for running redis
         os.kill(int(open('/tmp/redis-server.pid', 'r').read()), 0)
     except:
         rconf = local_dir+'/resources/redis.conf'
@@ -444,7 +447,13 @@ def start_redis_server():
         redis = subprocess.Popen(['redis-server', rconf])
 
 def main():
-    diag()
+    debug = '--debug' in sys.argv
+    if debug:
+        diag()
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.INFO
+    logging.getLogger().setLevel(log_level)
     spawner(start_redis_server).join()
     funcs = (analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor)
     proc_mapping = {}
