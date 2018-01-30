@@ -1,0 +1,54 @@
+ - hosts: all
+   remote_user: root
+   vars:
+   - venv_path: /home/sproutwave/sproutwave_venv
+   - code_path: /home/sproutwave/sproutwave_node
+   - sproutwave_user: sproutwave
+   tasks:
+   - user: name=sproutwave state=present shell=/bin/bash
+   - name: aptitude
+     apt: name=aptitude state=installed
+   - name: apt-get update && apt-get upgrade
+     apt: update_cache=yes upgrade=yes
+   - name: install list of packages
+     apt: name={{item}} state=installed
+     with_items:
+      - python3
+      - redis-server
+      - tmux
+      - bc
+      - psutils
+      - rsync
+      - tor
+   - name: remove list of packages
+     apt: name={{item}} state=absent autoremove=yes autoclean=yes
+     with_items:
+      - build-essential # no compiling!
+      - linux-libc-dev
+      - libc6-dev
+      - autoconf
+      - autotools-dev
+      - binutils
+      - gcc5
+      - cpp
+      - libasound2 # no audio
+      - curl # no downloads!
+      - wget
+      - git
+      - ntfs-3g # just no
+   - name: enable sproutwave_admin.pub for root
+     authorized_key:
+       user: root
+       state: present
+       key: '{{ item }}'
+     with_file:
+       - sproutwave_admin.pub
+   - name: enable sproutwave_admin.pub for sproutwave
+     authorized_key:
+       user: '{{sproutwave_user}}'
+       state: present
+       key: '{{ item }}'
+     with_file:
+       - sproutwave_admin.pub
+   - name: install redis config
+     copy: src=./resources/redis.conf dest=/etc/redis/redis.conf owner=redis

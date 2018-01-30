@@ -48,7 +48,7 @@
      with_file:
        - sproutwave_admin.pub
    - name: install redis config
-     copy: src=./redis.conf dest=/etc/redis/redis.conf owner=redis
+     copy: src=./resources/redis.conf dest=/etc/redis/redis.conf owner=redis
    - name: restart redis
      service: name=redis state=restarted
    - name: checkout git
