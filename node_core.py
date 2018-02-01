@@ -1,9 +1,11 @@
 import os
 import sys
 import time
+import atexit
 import typing
 import pprint
 import base64
+import signal
 import asyncio
 import logging
 import pathlib
@@ -114,7 +116,7 @@ def packed_bytes_to_iq(samples: bytes, out=None) -> typing.Union[None, numpy.nda
 
 
 async def init_redis():
-    connection = await asyncio_redis.Connection.create('localhost', 6380, encoder=CborEncoder())
+    connection = await asyncio_redis.Connection.create(host='/tmp/sproutwave.sock', port=0, encoder=CborEncoder())
     return connection
 
 
@@ -481,13 +483,24 @@ def diag():
     print('sys.path: %s' % sys.path)
 
 
-def start_redis_server():
+def start_redis_server(redis_socket_path = "/tmp/redis.sock"):
+    conf = b"""port 0
+tcp-backlog 100
+databases 1
+unixsocket %s
+maxmemory 170mb
+maxmemory-policy volatile-lru
+save ''""" % redis_socket_path.encode()
+    logging.debug('launching redis with conf: %s' % conf)
+    redis_process = subprocess.Popen(['redis-server', "-"], stdin = subprocess.PIPE, start_new_session=True)
     try:
-        os.kill(int(open('/tmp/redis-server.pid', 'r').read()), 0)
+        redis_process.communicate(conf, timeout=1)
     except:
-        rconf = local_dir + '/resources/redis.conf'
-        logging.info('launching redis with conf: %s' % rconf)
-        redis = subprocess.Popen(['redis-server', rconf])
+        pass
+    def kill_redis():
+        os.killpg(os.getpgid(redis_process.pid), signal.SIGKILL)
+    atexit.register(kill_redis)
+    return redis_process
 
 
 def main():
@@ -498,7 +511,7 @@ def main():
     else:
         log_level = logging.INFO
     logging.getLogger().setLevel(log_level)
-    spawner(start_redis_server).join()
+    redis_server_process = start_redis_server("/tmp/sproutwave.sock")
     funcs = analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor
     proc_mapping = {}
     while True:
