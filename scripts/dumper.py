@@ -1,5 +1,5 @@
 import sys
-sys.path.append('./') 
+sys.path.append('./')
 
 import asyncio
 import asyncio_redis
@@ -8,7 +8,7 @@ import cbor
 import base64
 
 async def main():
-    conn = await asyncio_redis.Connection.create('localhost', 6379, encoder=node_core.CborEncoder())
+    conn = await node_core.init_redis()
     keys = sys.argv[1::]
     if len(keys) == 0:
         keys = [await x for x in await conn.smembers('nontrivial_timestamps')]

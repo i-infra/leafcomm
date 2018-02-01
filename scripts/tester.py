@@ -11,6 +11,6 @@ for fname in sys.argv[1::]:
     start = time.time()
     info = cbor.loads(f)
     start = time.time()
-    decoded = node_core.try_decode(info)
+    decoded = node_core.pulses_to_packet(node_core.block_to_pulses(info))
     end = time.time()
     print(end-start, decoded)
