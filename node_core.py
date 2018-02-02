@@ -485,10 +485,9 @@ def diag():
 
 def start_redis_server(redis_socket_path = "/tmp/redis.sock"):
     conf = b"""port 0
-tcp-backlog 100
 databases 1
 unixsocket %s
-maxmemory 170mb
+maxmemory 100mb
 maxmemory-policy volatile-lru
 save ''""" % redis_socket_path.encode()
     logging.debug('launching redis with conf: %s' % conf)
