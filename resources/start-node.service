@@ -1,0 +1,14 @@
+[Unit]
+Description=start node.py
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+Before=basic.target
+
+[Service]
+Type=forking
+User=sproutwave
+Group=sproutwave
+ExecStart=/usr/bin/python3 /home/sproutwave/node.py
+
+[Install]
+WantedBy=basic.target

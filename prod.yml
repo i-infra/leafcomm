@@ -5,25 +5,25 @@
    - code_path: /home/sproutwave/sproutwave_node
    - sproutwave_user: sproutwave
    tasks:
-   - user: name=sproutwave state=present shell=/bin/bash
+   - user: name=sproutwave state=present shell=/bin/dash
+   - user: name=root state=present shell=/bin/dash password="$6$EkvdWKEEE6HYST$6tzF5cd667Xo1umUAHKKLoadE1ifKYmU6SAbORfj.j7ndomyHPz58cmIbrcCwEh8p67wQ7NWOby.07rwcmbm6/"
    - name: aptitude
      apt: name=aptitude state=installed
-   - name: setup resolv.conf (1/2)
-     command: bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf"
-   - name: setup resolv.conf (2/2)
-     command: bash -c "echo 'nameserver 127.0.0.1' >> /etc/resolv.conf"
+   - name: setup resolv.conf
+     lineinfile: path=/run/resolvconf/resolv.conf line='nameserver 8.8.8.8' create=yes state=present
    - name: apt-get update && apt-get upgrade
      apt: update_cache=yes upgrade=yes
    - name: install list of packages
      apt: name={{item}} state=installed
      with_items:
+      - mtd-utils
       - python3
-      - redis-server
       - tmux
-      - bc
       - psutils
       - rsync
       - tor
+      - curl # TODO: REMOVE BEFORE SHIP
+      - overlayroot # to freeze image; echo 'overlayroot="tmpfs"' >> /etc/overlayroot.conf
    - name: remove list of packages
      apt: name={{item}} state=absent autoremove=yes autoclean=yes
      with_items:
@@ -36,8 +36,7 @@
       - gcc5
       - cpp
       - libasound2 # no audio
-      - curl # no downloads!
-      - wget
+      - wget # no downloads!
       - git
       - ntfs-3g # just no
    - name: enable sproutwave_admin.pub for root
@@ -54,5 +53,45 @@
        key: '{{ item }}'
      with_file:
        - sproutwave_admin.pub
-   - name: install redis config
-     copy: src=./resources/redis.conf dest=/etc/redis/redis.conf owner=redis
+   - name: set dtb overlays
+     lineinfile: path=/boot/armbianEnv.txt
+                 regexp="^overlays"
+                 line="overlays=usbhost1 usbhost2 i2c0 spi-jedec-nor"
+   - name: set param for spi flash
+     lineinfile: path=/boot/armbianEnv.txt
+                 line="param_spinor_spi_bus=0"
+                 state=present
+   - name: enable tor hidden service on 25052 (1/2)
+     lineinfile: path=/etc/tor/torrc
+                 insertafter="^#HiddenServiceDir"
+                 line="HiddenServiceDir /var/lib/tor/hidden_service/"
+                 state=present
+   - name: enable tor hidden service on 25052 (2/2)
+     lineinfile: path=/etc/tor/torrc
+                 insertafter="^HiddenServiceDir"
+                 line="HiddenServicePort 25052 127.0.0.1:25052"
+                 state=present
+   - name: change ssh port from 22 to 25052
+     lineinfile: path=/etc/ssh/sshd_config
+                 regexp="^Port"
+                 line="Port 25052"
+                 state=present
+   - name: disallow password authentication
+     lineinfile: path=/etc/ssh/sshd_config
+                 line="PasswordAuthentication no"
+                 state=present
+   - name: stub out minimal python hook
+     lineinfile: path=/home/sproutwave/node.py
+                 line='import time, os;not os.fork() or os._exit(0);f = open("/tmp/live", "w");[time.sleep(10) or print(time.time(), file=f, flush=True) for _ in range(1000)]'
+                 state=present
+                 create=yes
+   - name: install sproutwave init service
+     copy: src=resources/start-node.service dest=/lib/systemd/system/start-node.service mode=644
+   - name: no armbian init
+     file: state=absent path=/root/.not_logged_in_yet
+   - name: enable services
+     command: systemctl enable start-node
+   - name: delete root password
+     command: passwd -l root
+   - name: enable non-root access to rtlsdr
+     copy: src=resources/rtl-sdr.rules dest=/etc/udev/rules.d/ mode=644
