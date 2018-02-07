@@ -24,6 +24,8 @@ from asyncio_redis.encoders import BaseEncoder, BytesEncoder
 
 
 L, H, E = 0, 1, 2
+data_dir = os.path.expanduser('~/.sproutwave/')
+
 FilterFunc = typing.Callable[[numpy.ndarray], numpy.ndarray]
 Info = typing.Dict
 Deciles = typing.Dict[int, typing.Tuple[int, int]]
@@ -116,7 +118,7 @@ def packed_bytes_to_iq(samples: bytes, out=None) -> typing.Union[None, numpy.nda
 
 
 async def init_redis():
-    connection = await asyncio_redis.Connection.create(host='/tmp/sproutwave.sock', port=0, encoder=CborEncoder())
+    connection = await asyncio_redis.Connection.create(host=data_dir+'sproutwave.sock', port=0, encoder=CborEncoder())
     return connection
 
 
@@ -158,6 +160,8 @@ async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):
         await tick(connection, function_name_depth=depth)
     return (timestamp, info)
 
+def get_new_center():
+    return int(433800000.0) + int(time.time() * 10) % 10 * 20000
 
 async def analog_to_block() -> typing.Awaitable[None]:
     import gc
@@ -170,7 +174,6 @@ async def analog_to_block() -> typing.Awaitable[None]:
     loud, blocks, total, count = False, [], 0, 1
     center_frequency = 433900000.0
 
-    def get_new_center(): return int(433800000.0) + int(time.time() * 10) % 10 * 20000
     async for byte_samples in sdr.stream(block_size, format='bytes'):
         await tick(connection)
         complex_samples = numpy.empty(samp_size, 'complex64')
@@ -421,8 +424,6 @@ async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=801
 
 async def packet_to_datastore() -> typing.Awaitable[None]:
     connection = await init_redis()
-    data_dir = os.path.expanduser('~/.sproutwave/')
-    pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
     datastore = tsd.TimeSeriesDatastore(db_name=data_dir + 'sproutwave_v1.db')
     sys.stderr.write(datastore.db_name + '\n')
     async for _, measurement in pseudosub(connection, 'datastore_channel'):
@@ -431,15 +432,15 @@ async def packet_to_datastore() -> typing.Awaitable[None]:
     return None
 
 
-def spawner(function_or_coroutine):
+def spawner(function_or_coroutine, *args, **kwargs):
     logging.debug('spawning: ' + function_or_coroutine.__name__)
 
     def callable_wrapper(main):
         if asyncio.iscoroutinefunction(main):
             loop = asyncio.get_event_loop()
-            return loop.run_until_complete(main())
+            return loop.run_until_complete(main(*args, **kwargs))
         else:
-            return main()
+            return main(*args, **kwargs)
     process = multiprocessing.Process(target=callable_wrapper, args=(function_or_coroutine,))
     process.start()
     return process
@@ -460,6 +461,8 @@ async def band_monitor(connection=None):
 
 
 async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_pipe=None):
+    timeout = 600
+    tick_cycle = 120
     if connection == None:
         connection = await init_redis()
     while True:
@@ -467,11 +470,11 @@ async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_
         ticks = await get_ticks(connection, key=key)
         for name, timestamp in ticks.items():
             logging.info('name: %s, now: %d, last_timestamp: %d' % (name, now, timestamp))
-            if now - timestamp > 120 and name is not None:
-                if send_pipe is not None:
+            if (now - timestamp) > timeout and name:
+                if send_pipe:
                     send_pipe.send(name)
-                return None
-        await asyncio.sleep(60 - (time.time() - now))
+                return
+        await asyncio.sleep(tick_cycle - (time.time() - now))
 
 
 def diag():
@@ -503,6 +506,7 @@ save ''""" % redis_socket_path.encode()
 
 
 def main():
+    pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
     debug = '--debug' in sys.argv
     if debug:
         diag()
@@ -510,7 +514,7 @@ def main():
     else:
         log_level = logging.INFO
     logging.getLogger().setLevel(log_level)
-    redis_server_process = start_redis_server("/tmp/sproutwave.sock")
+    redis_server_process = start_redis_server(data_dir + "sproutwave.sock")
     funcs = analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor
     proc_mapping = {}
     while True:
