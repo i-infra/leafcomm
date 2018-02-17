@@ -1,0 +1,14 @@
+[Unit]
+Description=privileged init
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+Before=basic.target
+
+[Service]
+Type=forking
+User=root
+Group=sudo
+ExecStart=/usr/bin/python3 /root/init.py
+
+[Install]
+WantedBy=basic.target

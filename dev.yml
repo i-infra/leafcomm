@@ -1,15 +1,15 @@
  - hosts: all
    remote_user: root
-   vars:
-   - venv_path: /home/sproutwave/sproutwave_venv
-   - code_path: /home/sproutwave/sproutwave_node
-   - sproutwave_user: sproutwave
    tasks:
-   - user: name=sproutwave state=present shell=/bin/bash
+   - user: name=name state=present shell=/bin/bash
+   - name: setup resolv.conf
+     lineinfile: path=/run/resolvconf/resolv.conf line='nameserver 8.8.8.8' create=yes state=present
+   - name: hardcode ports.ubuntu.com
+     lineinfile: path=/etc/hosts line='91.189.88.150 ports.ubuntu.com' state=present
    - name: aptitude
      apt: name=aptitude state=installed
    - name: apt-get update && apt-get upgrade
-     apt: update_cache=yes upgrade=yes
+     apt: upgrade=yes
    - name: install list of packages
      apt: name={{item}} state=installed
      with_items:
@@ -20,47 +20,21 @@
       - python3-pip
       - python3-setuptools
       - build-essential
-      - cmake # building librtlsdr
       - libuv-dev
       - zlib1g-dev
       - libsqlite3-dev
       - libffi-dev
-      - libudev-dev #libusb-dev installed
-      #- librtlsdr-dev # install from source
+      - libudev-dev
+      - libglib2.0-dev
+      - libreadline-dev
       - redis-server
       - tmux
       - git
       - bc
       - psutils
       - rsync
-   - name: enable sproutwave_admin.pub for root
-     authorized_key:
-       user: root
-       state: present
-       key: '{{ item }}'
-     with_file:
-       - sproutwave_admin.pub
-   - name: enable sproutwave_admin.pub for sproutwave
-     authorized_key:
-       user: '{{sproutwave_user}}'
-       state: present
-       key: '{{ item }}'
-     with_file:
-       - sproutwave_admin.pub
-   - name: install redis config
-     copy: src=./resources/redis.conf dest=/etc/redis/redis.conf owner=redis
-   - name: restart redis
-     service: name=redis state=restarted
-   - name: checkout git
-     synchronize: src=../swbs/ dest={{code_path}} #owner={{sproutwave_user}}
-     become: true
-     become_user: sproutwave
-   - name: set permissions
-     file: dest={{code_path}} owner={{sproutwave_user}} group={{sproutwave_user}} recurse=yes
-   - name: install pipenv
-     pip: name=pipenv
-   #- name: launch pipenv
-   #  shell: pipenv install
-   #  become: true
-   #  become_user: sproutwave
-   #  chdir: {{code_path}}
+      - usb-modeswitch
+      - zsh
+      - strace
+   - pip: name=pipenv
+   - pip: name=cython

@@ -1,5 +1,5 @@
 [Unit]
-Description=start node.py
+Description=unprivileged init
 DefaultDependencies=no
 After=sysinit.target local-fs.target
 Before=basic.target
@@ -8,7 +8,7 @@ Before=basic.target
 Type=forking
 User=sproutwave
 Group=sproutwave
-ExecStart=/usr/bin/python3 /home/sproutwave/node.py
+ExecStart=/usr/bin/python3 /home/sproutwave/init.py
 
 [Install]
 WantedBy=basic.target
