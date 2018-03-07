@@ -1,12 +1,11 @@
  - hosts: all
    remote_user: root
    vars:
-   - venv_path: /home/sproutwave/sproutwave_venv
-   - code_path: /home/sproutwave/sproutwave_node
-   - sproutwave_user: sproutwave
+   - user: name #sproutwave
+   - pubkey: id_ed25519.neo.pub
    tasks:
    - user: name=name state=present shell=/bin/dash uid=1000 # TODO: REMOVE BEFORE SHIP
-   - user: name=sproutwave state=present shell=/bin/dash uid=1001
+     #- user: name=sproutwave state=present shell=/bin/dash uid=1001
    - user: name=root state=present shell=/bin/dash password="$6$EkvdWKEEE6HYST$6tzF5cd667Xo1umUAHKKLoadE1ifKYmU6SAbORfj.j7ndomyHPz58cmIbrcCwEh8p67wQ7NWOby.07rwcmbm6/"
    - name: aptitude
      apt: name=aptitude state=installed
@@ -21,6 +20,7 @@
       - python3
       - tmux
       - psutils
+      - usb-modeswitch
       - rsync
       - tor
       - curl # TODO: REMOVE BEFORE SHIP
@@ -41,20 +41,20 @@
       - wget # no downloads!
       - git
       - ntfs-3g # just no
-   - name: enable sproutwave_admin.pub for root
+   - name: enable admin pubkey for root
      authorized_key:
        user: root
        state: present
-       key: '{{ item }}'
+       key: '{{item}}'
      with_file:
-       - sproutwave_admin.pub
-   - name: enable sproutwave_admin.pub for sproutwave
+       - '{{pubkey}}'
+   - name: enable admin pubkey for user
      authorized_key:
-       user: '{{sproutwave_user}}'
+       user: '{{user}}'
        state: present
-       key: '{{ item }}'
+       key: '{{item}}'
      with_file:
-       - sproutwave_admin.pub
+       - '{{pubkey}}'
    - name: set dtb overlays
      lineinfile: path=/boot/armbianEnv.txt
                  regexp="^overlays"
@@ -88,9 +88,9 @@
                  line='g_ether'
                  state=present
                  create=yes
-   - file: path=/home/sproutwave/init.py state=absent
-   - name: stub out minimal python hook (sproutwave)
-     lineinfile: path=/home/sproutwave/init.py
+   - file: path=/home/{{user}}/init.py state=absent
+   - name: stub out minimal python hook (user)
+     lineinfile: path=/home/{{user}}/init.py
                  line='import time, os;not os.fork() or os._exit(0);f = open("/tmp/live-unpriv", "w");[time.sleep(10) or print(time.time(), file=f, flush=True) for _ in range(1000)]'
                  state=present
                  create=yes
@@ -100,16 +100,16 @@
                  line='import time, os;not os.fork() or os._exit(0);f = open("/tmp/live-priv", "w");[time.sleep(10) or print(time.time(), file=f, flush=True) for _ in range(1000)]'
                  state=present
                  create=yes
-   - name: install sproutwave init service (unprivileged)
-     copy: src=resources/init-sproutwave-unprivileged.service dest=/lib/systemd/system/init-sproutwave-unprivileged.service mode=644
-   - name: install sproutwave init service (privileged)
-     copy: src=resources/init-sproutwave-privileged.service dest=/lib/systemd/system/init-sproutwave-privileged.service mode=644
+   - name: install user init service (unprivileged)
+     copy: src=resources/init-user-unprivileged.service dest=/lib/systemd/system/init-user-unprivileged.service mode=644
+   - name: install user init service (privileged)
+     copy: src=resources/init-user-privileged.service dest=/lib/systemd/system/init-user-privileged.service mode=644
    - name: disable armbian login prompt
      file: state=absent path=/root/.not_logged_in_yet
    - name: enable init services
-     command: systemctl enable init-sproutwave-unprivileged init-sproutwave-privileged
+     command: systemctl enable init-user-unprivileged init-user-privileged
    - name: disable serial
-     command: systemctl disable serial-getty@ttyS0
+     command: systemctl disable serial-getty@ttyGS0
    - name: delete root password
      command: passwd -l root
    - name: enable non-root access to rtlsdr
