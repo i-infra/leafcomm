@@ -1,11 +1,11 @@
  - hosts: all
    remote_user: root
    vars:
-   - user: name #sproutwave
-   - pubkey: id_ed25519.neo.pub
+   - user: sproutwave
+   - pubkey: id_ed25519.rock.pub
    tasks:
    - user: name=name state=present shell=/bin/dash uid=1000 # TODO: REMOVE BEFORE SHIP
-     #- user: name=sproutwave state=present shell=/bin/dash uid=1001
+   - user: name=sproutwave state=present shell=/bin/dash uid=1001
    - user: name=root state=present shell=/bin/dash password="$6$EkvdWKEEE6HYST$6tzF5cd667Xo1umUAHKKLoadE1ifKYmU6SAbORfj.j7ndomyHPz58cmIbrcCwEh8p67wQ7NWOby.07rwcmbm6/"
    - name: aptitude
      apt: name=aptitude state=installed
@@ -24,7 +24,6 @@
       - rsync
       - tor
       - curl # TODO: REMOVE BEFORE SHIP
-      - zsh # TODO: REMOVE BEFORE SHIP
       - overlayroot # to freeze image; echo 'overlayroot="tmpfs"' >> /etc/overlayroot.conf
    - name: remove list of packages
      apt: name={{item}} state=absent autoremove=yes autoclean=yes
@@ -88,12 +87,19 @@
                  line='g_ether'
                  state=present
                  create=yes
+   - name: blacklist rtlsdr
+     lineinfile: path=/etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
+                 line='blacklist dvb_usb_rtl28xxu'
+                 state=present
+                 create=yes
    - file: path=/home/{{user}}/init.py state=absent
    - name: stub out minimal python hook (user)
      lineinfile: path=/home/{{user}}/init.py
                  line='import time, os;not os.fork() or os._exit(0);f = open("/tmp/live-unpriv", "w");[time.sleep(10) or print(time.time(), file=f, flush=True) for _ in range(1000)]'
                  state=present
                  create=yes
+                 owner={{user}}
+                 group={{user}}
    - file: path=/root/init.py state=absent
    - name: stub out minimal python hook (root)
      lineinfile: path=/root/init.py
@@ -110,6 +116,8 @@
      command: systemctl enable init-user-unprivileged init-user-privileged
    - name: disable serial
      command: systemctl disable serial-getty@ttyGS0
+   - name: disable serial
+     command: systemctl disable serial-getty@ttyS0
    - name: delete root password
      command: passwd -l root
    - name: enable non-root access to rtlsdr
