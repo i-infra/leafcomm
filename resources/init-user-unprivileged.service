@@ -8,7 +8,7 @@ Before=basic.target
 Type=forking
 User=sproutwave
 Group=sproutwave
-ExecStart=/usr/bin/python3 /home/sproutwave/init.py
+ExecStart=/usr/bin/python3 /home/sproutwave/init_unpriv.py
 
 [Install]
 WantedBy=basic.target

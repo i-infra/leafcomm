@@ -92,9 +92,9 @@
                  line='blacklist dvb_usb_rtl28xxu'
                  state=present
                  create=yes
-   - file: path=/home/{{user}}/init.py state=absent
+   - file: path=/home/{{user}}/init_unpriv.py state=absent
    - name: stub out minimal python hook (user)
-     lineinfile: path=/home/{{user}}/init.py
+     lineinfile: path=/home/{{user}}/init_unpriv.py
                  line='import time, os;not os.fork() or os._exit(0);f = open("/tmp/live-unpriv", "w");[time.sleep(10) or print(time.time(), file=f, flush=True) for _ in range(1000)]'
                  state=present
                  create=yes
@@ -106,6 +106,8 @@
                  line='import time, os;not os.fork() or os._exit(0);f = open("/tmp/live-priv", "w");[time.sleep(10) or print(time.time(), file=f, flush=True) for _ in range(1000)]'
                  state=present
                  create=yes
+                 owner=root
+                 group=sudo
    - name: install user init service (unprivileged)
      copy: src=resources/init-user-unprivileged.service dest=/lib/systemd/system/init-user-unprivileged.service mode=644
    - name: install user init service (privileged)
