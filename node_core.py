@@ -10,6 +10,7 @@ import asyncio
 import logging
 import pathlib
 import itertools
+import encodings
 import statistics
 import subprocess
 import multiprocessing
@@ -494,7 +495,7 @@ maxmemory 100mb
 maxmemory-policy volatile-lru
 save ''""" % redis_socket_path.encode()
     logging.debug('launching redis with conf: %s' % conf)
-    redis_process = subprocess.Popen(['redis-server', "-"], stdin = subprocess.PIPE, start_new_session=True)
+    redis_process = subprocess.Popen(['redis-server', "-"], stdin = subprocess.PIPE)
     try:
         redis_process.communicate(conf, timeout=1)
     except:
