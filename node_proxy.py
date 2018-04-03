@@ -3,6 +3,7 @@ import ssl
 import zlib
 import json
 import aiohttp
+import functools as f
 from aiohttp import web
 
 import nacl.public
@@ -37,9 +38,10 @@ async def init_ws(request):
     while True:
         ws_closed = False
         ts, udp_bytes = await pseudosub1(redis_connection, 'udp_inbound', do_tick=False)
-        if udp_bytes is not None:
+        if udp_bytes:
             compressed_cbor_bytes = box.decrypt(udp_bytes)
             update_msg = cbor.loads(zlib.decompress(compressed_cbor_bytes))
+            print(update_msg)
             json_bytes = json.dumps(update_msg)
         else:
             json_bytes = None
@@ -82,11 +84,13 @@ def create_app(loop):
 
 if __name__ == "__main__":
     diag()
-    spawner(start_redis_server).join()
+    redis_server = f.partial(start_redis_server, 'proxy')
+    redis_server.__name__ = "redis_server"
+    spawner(redis_server).join()
     loop = asyncio.get_event_loop()
     app = create_app(loop)
-    app['connection'] = loop.run_until_complete(asyncio.ensure_future(init_redis()))
-    protocol = ProxyDatagramProtocol(loop, loop.run_until_complete(asyncio.ensure_future(init_redis())))
+    app['connection'] = loop.run_until_complete(asyncio.ensure_future(init_redis("proxy")))
+    protocol = ProxyDatagramProtocol(loop, loop.run_until_complete(asyncio.ensure_future(init_redis("proxy"))))
     loop.create_task(loop.create_datagram_endpoint(lambda: protocol, local_addr=('0.0.0.0', 8019)))
     context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     context.load_cert_chain(certfile=local_dir+"/resources/fullchain.pem", keyfile=local_dir+"/resources/privkey.pem")
