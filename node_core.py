@@ -357,7 +357,7 @@ async def block_to_packet() -> typing.Awaitable[None]:
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', [timestamp])
-            await connection.hset('sensor_uuids', decoded['uid'], (await connection.hget('sensor_uuids', decoded['uid']) or 0) + 1, timestamp))
+            await connection.hset('sensor_uuids', decoded['uid'], ((await connection.hget('sensor_uuids', decoded['uid']) or (0, None))[0] + 1, timestamp))
             await connection.expire(timestamp, 120)
     return None
 
