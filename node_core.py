@@ -118,8 +118,8 @@ def packed_bytes_to_iq(samples: bytes, out=None) -> typing.Union[None, numpy.nda
         return True
 
 
-async def init_redis():
-    connection = await asyncio_redis.Connection.create(host=data_dir+'sproutwave.sock', port=0, encoder=CborEncoder())
+async def init_redis(preface=''):
+    connection = await asyncio_redis.Connection.create(host=data_dir+preface+'sproutwave.sock', port=0, encoder=CborEncoder())
     return connection
 
 
@@ -207,15 +207,9 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     await pseudopub(connection, 'eof_timestamps', timestamp, info)
                     logging.debug('flushing: %s' % {'duration': time.time() - timestamp, 'center_freq': center_frequency, 'block_count': len(blocks),
                                                     'block_power': numpy.sum(numpy.abs(block)) / len(blocks), 'avg': avg, 'lifetime_blocks': count})
-                    now = await connection.hget('good_block', center_frequency)
-                    if now == None:
-                        now = 0
-                    await connection.hset('good_block', center_frequency, now + 1)
+                    await connection.hset('good_block', center_frequency, (await connection.hget('good_block', center_frequency) or 0) + 1)
                 else:
-                    now = await connection.hget('short_block', center_frequency)
-                    if now == None:
-                        now = 0
-                    await connection.hset('short_block', center_frequency, now + 1)
+                    await connection.hset('short_block', center_frequency, (await connection.hget('short_block', center_frequency) or 0) + 1)
                 blocks, loud = [], False
                 gc.collect()
     await sdr.stop()
@@ -363,6 +357,7 @@ async def block_to_packet() -> typing.Awaitable[None]:
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', [timestamp])
+            await connection.hset('sensor_uuids', decoded['uid'], (await connection.hget('sensor_uuids', decoded['uid']) or 0) + 1, timestamp))
             await connection.expire(timestamp, 120)
     return None
 
@@ -395,10 +390,15 @@ def register_session_box(base_url='http://localhost:8019'):
     human_name, uid = get_hardware_uid()
     logging.info('human name: %s' % human_name)
     signed_message, session_box = box_semisealed(uid, relay_public_key)
-    response = urllib.request.urlopen(base_url + '/register', data=signed_message)
-    if response.getcode() != 200:
-        raise Exception('sproutwave session key setup failed')
-    return (uid, session_box)
+    while True:
+        try:
+            response = urllib.request.urlopen(base_url + '/register', data=signed_message)
+            if response.getcode() != 200:
+                raise Exception('sproutwave session key setup failed')
+            else:
+                return (uid, session_box)
+        except:
+            time.sleep(60)
 
 
 async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=8019, https_port=8019, box=None):
@@ -414,13 +414,19 @@ async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=801
     samples = {}
     last_sent = time.time()
     async for _, reading in pseudosub(connection, 'upstream_channel'):
-        if reading is not None:
-            samples[reading[1] + 4096 * reading[2]] = reading
-        if time.time() > last_sent + update_interval:
-            update_samples = [x for x in samples.values()]
-            logging.info(pprint.pformat(update_samples))
-            sock.sendto(box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, udp_port))
-            last_sent = time.time()
+        if reading:
+            (seen_count, last_seen) = (await connection.hget('sensor_uuids', reading[1])) or (0, reading[0])
+            seen_multiple_times_recently = (seen_count > 1) and ((reading[0] - last_seen) < 600)
+        else:
+            seen_multiple_times_recently = False
+        if seen_multiple_times_recently:
+            if reading:
+                samples[reading[1] + 4096 * reading[2]] = reading
+            if (time.time() > last_sent + update_interval):
+                update_samples = [x for x in samples.values()]
+                logging.info(pprint.pformat(update_samples))
+                sock.sendto(box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, udp_port))
+                last_sent = time.time()
 
 
 async def packet_to_datastore() -> typing.Awaitable[None]:
@@ -460,6 +466,15 @@ async def band_monitor(connection=None):
             print('%d\t%d\t%d' % (freq, count, failed))
         await asyncio.sleep(60)
 
+async def sensor_monitor(connection=None):
+    if connection == None:
+        connection = await init_redis()
+    while True:
+        sensor_uuids = await connection.hgetall_asdict('sensor_uuids')
+        print('UUID\tCOUNT')
+        for uid, count in sorted(sensor_uuids.items()):
+            print('%d\t%d\t%f' % (uid, count[0], count[1]))
+        await asyncio.sleep(60)
 
 async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_pipe=None):
     timeout = 600
@@ -487,7 +502,8 @@ def diag():
     print('sys.path: %s' % sys.path)
 
 
-def start_redis_server(redis_socket_path = "/tmp/redis.sock"):
+def start_redis_server(preface=""):
+    redis_socket_path = data_dir+preface+'sproutwave.sock'
     conf = b"""port 0
 databases 1
 unixsocket %s
@@ -515,8 +531,8 @@ def main():
     else:
         log_level = logging.INFO
     logging.getLogger().setLevel(log_level)
-    redis_server_process = start_redis_server(data_dir + "sproutwave.sock")
-    funcs = analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor
+    redis_server_process = start_redis_server()
+    funcs = analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor, sensor_monitor
     proc_mapping = {}
     while True:
         for func in funcs:
