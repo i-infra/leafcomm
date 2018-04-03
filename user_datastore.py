@@ -14,7 +14,7 @@ class UserDatabase(object):
         self.db_name = db_name
         self.conn = sql.connect(db_name)
         init_users = 'CREATE TABLE IF NOT EXISTS users (UID INTEGER PRIMARY KEY, Name TEXT, \
-                Email TEXT, Phone TEXT, PasswordHash BLOB, PasswordMeta BLOB, NodeID TEXT, Alerts BLOB)'
+                Email TEXT, Phone TEXT, PasswordHash BLOB, PasswordMeta BLOB, NodeID TEXT, Alerts BLOB, AppSettings BLOB)'
         self.conn.execute(init_users)
         create_index = 'CREATE INDEX IF NOT EXISTS ON users (Email ASC)'
         self.conn.execute(create_index)
@@ -44,6 +44,9 @@ class UserDatabase(object):
         selector = "SELECT (UID, NodeID, Alerts) FROM users"
         alerts = self.cursor.execute(selector)
         return alerts
+
+    def update_app_settings(self):
+        # localization, units, etc
 
     def add_user(self, name, email, phone, password_hash, password_meta):
         inserter = "INSERT INTO readings VALUES(?, ?, ?, ?, ?)"
