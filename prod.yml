@@ -3,14 +3,17 @@
    vars:
    - user: sproutwave
    - pubkey: id_ed25519.rock.pub
+   - dns_ip: 1.0.0.1
    tasks:
    - user: name=name state=present shell=/bin/dash uid=1000 # TODO: REMOVE BEFORE SHIP
    - user: name=sproutwave state=present shell=/bin/dash uid=1001
    - user: name=root state=present shell=/bin/dash password="$6$EkvdWKEEE6HYST$6tzF5cd667Xo1umUAHKKLoadE1ifKYmU6SAbORfj.j7ndomyHPz58cmIbrcCwEh8p67wQ7NWOby.07rwcmbm6/"
    - name: aptitude
      apt: name=aptitude state=installed
-   - name: setup resolv.conf
-     lineinfile: path=/run/resolvconf/resolv.conf line='nameserver 8.8.8.8' create=yes state=present
+   - name: hardcode first DNS server
+     lineinfile: path=/etc/resolvconf/resolv.conf.d/head state=present create=yes line=nameserver\ {{dns_ip}}
+   - name: stub in temporary for working chroot
+     lineinfile: path=/run/resolvconf/resolv.conf create=yes state=present line=nameserver\ {{dns_ip}}
    - name: apt-get update && apt-get upgrade
      apt: update_cache=yes upgrade=yes
    - name: install list of packages
@@ -87,7 +90,7 @@
                  line='g_ether'
                  state=present
                  create=yes
-   - name: blacklist rtlsdr
+   - name: blacklist rtlsdr kernel support
      lineinfile: path=/etc/modprobe.d/blacklist-dvb_usb_rtl28xxu.conf
                  line='blacklist dvb_usb_rtl28xxu'
                  state=present
