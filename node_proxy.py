@@ -33,26 +33,37 @@ async def init_ws(request):
     msg = await ws.receive()
     uid = msg.data
     pub_key_bytes = await redis_connection.hget('identities', uid)
+    json_bytes = await redis_connection.hget('most_recent', uid)
+    if json_bytes is not None:
+        await ws.send_str(json_bytes)
     pub_key = nacl.public.PublicKey(pub_key_bytes)
     box = nacl.public.Box(relay_secret_key, pub_key)
+    len_queue = await redis_connection.llen('udp_inbound')
+    await redis_connection.ltrim('udp_inbound', len_queue-2, len_queue)
     while True:
         ws_closed = False
         ts, udp_bytes = await pseudosub1(redis_connection, 'udp_inbound', do_tick=False)
         if udp_bytes:
-            compressed_cbor_bytes = box.decrypt(udp_bytes)
-            update_msg = cbor.loads(zlib.decompress(compressed_cbor_bytes))
-            print(update_msg)
-            json_bytes = json.dumps(update_msg)
+            try:
+                compressed_cbor_bytes = box.decrypt(udp_bytes)
+                update_msg = cbor.loads(zlib.decompress(compressed_cbor_bytes))
+                print(update_msg)
+                json_bytes = json.dumps(update_msg)
+            except:
+                json_bytes = None
         else:
             json_bytes = None
         try:
             msg = await asyncio.wait_for(ws.receive(), 1)
             if msg.type in [aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING]:
+                print('closing')
                 break
         except asyncio.TimeoutError:
             pass
         if json_bytes is not None:
-            ws.send_str(json_bytes)
+            await redis_connection.hset('most_recent', uid, json_bytes)
+            await ws.send_str(json_bytes)
+    print('ws broke loop')
     return ws
 
 def unbox_semisealed(byte_blob, secret_key = relay_secret_key):
