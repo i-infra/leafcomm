@@ -2,7 +2,7 @@
    remote_user: root
    vars:
    - user: sproutwave
-   - pubkey: id_ed25519.rock.pub
+   - pubkey: id_ed25519.next.pub
    - dns_ip: 1.0.0.1
    tasks:
    - user: name=name state=present shell=/bin/dash uid=1000 # TODO: REMOVE BEFORE SHIP
@@ -11,9 +11,13 @@
    - name: aptitude
      apt: name=aptitude state=installed
    - name: hardcode first DNS server
-     lineinfile: path=/etc/resolvconf/resolv.conf.d/head state=present create=yes line=nameserver\ {{dns_ip}}
+     lineinfile: path=/etc/resolvconf/resolv.conf.d/head state=present create=yes line="nameserver {{dns_ip}}"
    - name: stub in temporary for working chroot
-     lineinfile: path=/run/resolvconf/resolv.conf create=yes state=present line=nameserver\ {{dns_ip}}
+     lineinfile: path=/run/resolvconf/resolv.conf create=yes state=present line="nameserver {{dns_ip}}"
+   - name: stub in temporary for working chroot
+     lineinfile: path=/etc/resolv.conf create=yes state=present line="nameserver {{dns_ip}}"
+   - name: load custom ntp.conf file
+     copy: src=resources/ntp.conf dest=/etc/ mode=644
    - name: apt-get update && apt-get upgrade
      apt: update_cache=yes upgrade=yes
    - name: install list of packages
