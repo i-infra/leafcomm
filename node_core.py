@@ -362,7 +362,7 @@ async def block_to_packet() -> typing.Awaitable[None]:
     return None
 
 
-def get_hardware_uid():
+def get_hardware_uid() -> (str, bytes):
     import nacl.hash
     import nacl.encoding
     import glob
@@ -374,13 +374,14 @@ def get_hardware_uid():
     return (human_name, hashed)
 
 
-def box_semisealed(to_box, public_key):
+def create_box_semisealed(to_box, public_key):
     import nacl
     session_key = nacl.public.PrivateKey.generate()
     session_box = nacl.public.Box(session_key, public_key)
+    session_id = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
     nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
-    boxed = session_box.encrypt(to_box, nonce)
-    return (session_key.public_key.encode() + boxed, session_box)
+    boxed = session_box.encrypt(session_id+to_box, nonce)
+    return (session_key.public_key.encode() + boxed, session_id, session_box)
 
 
 def register_session_box(base_url='http://localhost:8019'):
@@ -389,14 +390,14 @@ def register_session_box(base_url='http://localhost:8019'):
     relay_public_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x11\xd3U\xb0\xbc\xe0\xb32\x15t\xbb\xe49^Y\xbf2\x8dUo')
     human_name, uid = get_hardware_uid()
     logging.info('human name: %s' % human_name)
-    signed_message, session_box = box_semisealed(uid, relay_public_key)
+    signed_message, session_id, session_box = create_box_semisealed(uid, relay_public_key)
     while True:
         try:
             response = urllib.request.urlopen(base_url + '/register', data=signed_message)
             if response.getcode() != 200:
                 raise Exception('sproutwave session key setup failed')
             else:
-                return (uid, session_box)
+                return (uid, session_id, session_box)
         except:
             time.sleep(60)
 
@@ -407,8 +408,8 @@ async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=801
     if loop == None:
         loop = asyncio.get_event_loop()
     if box == None:
-        uid, box = register_session_box(base_url='https://%s:%d' % (host, https_port))
-    update_interval = 2
+        uid, session_id, box = register_session_box(base_url='https://%s:%d' % (host, https_port))
+    max_update_interval = 1
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     connection = await init_redis()
     samples = {}
@@ -422,10 +423,10 @@ async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=801
         if seen_multiple_times_recently:
             if reading:
                 samples[reading[1] + 4096 * reading[2]] = reading
-            if (time.time() > last_sent + update_interval):
+            if (time.time() > last_sent + max_update_interval):
                 update_samples = [x for x in samples.values()]
                 logging.info(pprint.pformat(update_samples))
-                sock.sendto(box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, udp_port))
+                sock.sendto(session_id+box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, udp_port))
                 last_sent = time.time()
 
 
