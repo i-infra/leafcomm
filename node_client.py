@@ -14,6 +14,6 @@ async def test_ws():
                 print(msg)
 while True:
     try:
-        spawner(test_ws).join()
+        handlebars.multi_spawner(test_ws).join()
     except KeyboardInterrupt:
         break
