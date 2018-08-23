@@ -21,7 +21,7 @@ import bottleneck
 import ts_datastore as tsd
 
 import handlebars
-
+import _constants
 
 L, H, E = 0, 1, 2
 data_dir = os.path.expanduser('~/.sproutwave/')
@@ -360,40 +360,38 @@ def create_box_semisealed(to_box, public_key):
     import nacl
     session_key = nacl.public.PrivateKey.generate()
     session_box = nacl.public.Box(session_key, public_key)
-    session_id = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
     nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
-    boxed = session_box.encrypt(session_id+to_box, nonce)
-    return (session_key.public_key.encode() + boxed, session_id, session_box)
+    boxed = session_box.encrypt(to_box, nonce)
+    return (session_key.public_key.encode() + boxed, session_box)
 
 
-def register_session_box(base_url='http://localhost:8019'):
+async def register_session_box():
     import nacl.public
-    import urllib.request
-    relay_public_key = nacl.public.PublicKey(b'D\x8e\x9cT\x8b\xec\xb7\xf4\x17\xea\xa6\x8c\x11\xd3U\xb0\xbc\xe0\xb32\x15t\xbb\xe49^Y\xbf2\x8dUo')
+    import aiohttp
+    relay_public_key = nacl.public.PublicKey(_constants.upstream_pubkey_bytes)
     human_name, uid = get_hardware_uid()
     logging.info('human name: %s' % human_name)
-    signed_message, session_id, session_box = create_box_semisealed(uid, relay_public_key)
-    while True:
-        try:
-            response = urllib.request.urlopen(base_url + '/register', data=signed_message)
-            if response.getcode() != 200:
-                raise Exception('sproutwave session key setup failed')
-            else:
+    signed_message, session_box = create_box_semisealed(uid, relay_public_key)
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url=f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/register', data=signed_message) as resp:
+            if resp.status == 200:
+                session_id = await resp.read()
                 return (uid, session_id, session_box)
-        except:
-            time.sleep(60)
+            else:
+                raise Exception('sproutwave session key setup failed')
 
 
-async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=8019, https_port=8019, box=None):
+async def packet_to_upstream(loop=None, box=None):
+    connection = await init_redis()
+    await tick(connection)
     import socket
     import zlib
     if loop == None:
         loop = asyncio.get_event_loop()
     if box == None:
-        uid, session_id, box = register_session_box(base_url='https://%s:%d' % (host, https_port))
+        uid, session_id, box = await register_session_box()
     max_update_interval = 1
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    connection = await init_redis()
     samples = {}
     last_sent = time.time()
     async for _, reading in pseudosub(connection, 'upstream_channel'):
@@ -409,7 +407,8 @@ async def packet_to_upstream(loop=None, host='data.sproutwave.com', udp_port=801
             if (time.time() > last_sent + max_update_interval):
                 update_samples = [x for x in samples.values()]
                 logging.info(pprint.pformat(update_samples))
-                sock.sendto(session_id+box.encrypt(zlib.compress(cbor.dumps(update_samples))), (host, udp_port))
+                update_message = session_id+box.encrypt(zlib.compress(cbor.dumps(update_samples)))
+                sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
                 last_sent = time.time()
 
 
