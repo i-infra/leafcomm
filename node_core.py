@@ -6,14 +6,12 @@ import typing
 import pprint
 import signal
 import asyncio
-import logging
 import pathlib
 import itertools
 import encodings
 import statistics
 import subprocess
 import multiprocessing
-
 import cbor
 import blosc
 import numpy
@@ -31,6 +29,7 @@ Info = typing.Dict
 Deciles = typing.Dict[int, typing.Tuple[int, int]]
 Packet = typing.NamedTuple('Packet', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
 
+logger = handlebars.get_logger(__name__, debug = '--debug' in sys.argv)
 
 def complex_to_stereo(a): return numpy.dstack((a.real, a.imag))[0]
 
@@ -38,22 +37,7 @@ def complex_to_stereo(a): return numpy.dstack((a.real, a.imag))[0]
 def stereo_to_complex(a): return a[0] + a[1] * 1j
 
 
-def rerle(xs): return [(sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])]
-
-
-def rle(xs): return [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
-
-
-def rld(xs): return itertools.chain.from_iterable((itertools.repeat(x, n) for n, x in xs))
-
-
-def get_function_name(depth=0): return sys._getframe(depth + 1).f_code.co_name
-
-
 def printer(xs): return ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
-
-
-def debinary(ba): return sum([x * 2 ** i for i, x in enumerate(reversed(ba))])
 
 
 def brickwall(xs): return bottleneck.move_mean(xs, 32, 1)
@@ -104,7 +88,7 @@ def init_redis(preface=''):
     return handlebars.init_redis(data_dir+preface+'sproutwave.sock')
 
 async def tick(connection, function_name_depth=1, key='sproutwave_ticks'):
-    name = get_function_name(function_name_depth)
+    name = handlebars.get_function_name(function_name_depth)
     await connection.hset(key, name, time.time())
 
 
@@ -128,7 +112,9 @@ async def pseudopub(connection, channels, timestamp = None, info = None):
 
 async def pseudosub(connection, channel, timeout=360):
     while True:
-        yield await pseudosub1(connection, channel, timeout)
+        res = await pseudosub1(connection, channel, timeout)
+        if res:
+            yield res
 
 
 async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):
@@ -136,7 +122,8 @@ async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):
     info = await connection.get(timestamp)
     if do_tick == True:
         await tick(connection, function_name_depth=depth)
-    return (float(timestamp), cbor.loads(info))
+    if info is not None:
+        return (float(timestamp), cbor.loads(info))
 
 def get_new_center():
     return int(433800000.0) + int(time.time() * 10) % 10 * 20000
@@ -166,7 +153,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
                 historical_power, sampled_background_block_count = historical_background_power, 1
             center_frequency = get_new_center()
             sdr.set_center_freq(center_frequency)
-            logging.info('center frequency: %d' % sdr.get_center_freq())
+            logger.info('center frequency: %d' % sdr.get_center_freq())
         # init accumulator safely
         if historical_power == 0:
             historical_power = block_power
@@ -187,7 +174,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     size, dtype, compressed = compress(sampled_message)
                     info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                     await pseudopub(connection, 'eof_timestamps', timestamp, info)
-                    logging.debug('flushing: %s' % {'duration': time.time() - timestamp, 'center_freq': center_frequency, 'block_count': len(blocks_accumulated), 'message power': numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated), 'avg': historical_background_power, 'lifetime_blocks': sampled_background_block_count})
+                    logger.debug('flushing: %s' % {'duration': time.time() - timestamp, 'center_freq': center_frequency, 'block_count': len(blocks_accumulated), 'message power': numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated), 'avg': historical_background_power, 'lifetime_blocks': sampled_background_block_count})
                     await connection.hincrby('good_block', center_frequency, 1)
                 else:
                     await connection.hincrby('short_block', center_frequency, 1)
@@ -206,7 +193,7 @@ def block_to_pulses(compressed_block: Info, smoother: FilterFunc=brickwall) -> n
     beep_smoothed = smoother(beep_absolute)
     threshold = 1.1 * bottleneck.nanmean(beep_smoothed)
     beep_binary = beep_smoothed > threshold
-    pulses = rle(beep_binary)
+    pulses = handlebars.rle(beep_binary)
     return numpy.array(pulses)
 
 
@@ -241,7 +228,7 @@ def pulses_to_breaks(pulses: numpy.ndarray, deciles: Deciles) -> typing.List[int
         if len(expected_breaks) < 2:
             return []
         tolerance = d_mode // 10
-        breaks = [x for x, bd in zip(breaks, break_deltas) if True in [abs(x - y) < tolerance for y in expected_breaks] or bd == d_mode or bd < 5]
+        breaks = [x for x, bd in zip(breaks, break_deltas) if any([abs(x - y) < tolerance for y in expected_breaks]) or bd == d_mode or bd < 5]
     return breaks
 
 
@@ -273,11 +260,11 @@ def demodulator(pulses: numpy.ndarray) -> typing.Iterable[Packet]:
 
 def silver_sensor(packet: Packet) -> typing.Dict:
     if packet.errors == []:
-        bits = [x[0] == 2 for x in rle(packet.packet) if x[1] == 0]
+        bits = [x[0] == 2 for x in handlebars.rle(packet.packet) if x[1] == 0]
         if len(bits) == 42:
             fields = [0, 2, 8, 2, 2, 4, 4, 4, 4, 4, 8]
             fields = [x for x in itertools.accumulate(fields)]
-            results = [debinary(bits[x:y]) for x, y in zip(fields, fields[1:])]
+            results = [handlebars.debinary(bits[x:y]) for x, y in zip(fields, fields[1:])]
             if results[1] == 255:
                 return {}
             temp = 16 ** 2 * results[6] + 16 * results[5] + results[4]
@@ -292,7 +279,7 @@ def silver_sensor(packet: Packet) -> typing.Dict:
         elif len(bits) == 36:
             fields = [0] + [4] * 9
             fields = [x for x in itertools.accumulate(fields)]
-            n = [debinary(bits[x:y]) for x, y in zip(fields, fields[1:])]
+            n = [handlebars.debinary(bits[x:y]) for x, y in zip(fields, fields[1:])]
             model = n[0]
             uid = n[1] << 4 | n[2]
             temp = n[4] << 8 | n[5] << 4 | n[6]
@@ -312,7 +299,7 @@ def pulses_to_packet(pulses: numpy.ndarray) -> typing.Dict:
         for packet in demodulator(pulses):
             res = silver_sensor(packet)
             if 'uid' in res.keys():
-                logging.debug(printer(packet.packet))
+                logger.debug(printer(packet.packet))
                 res['uid'] = res['channel'] + 1 * 1024 + res['uid']
                 return res
     return {}
@@ -330,11 +317,11 @@ async def block_to_packet() -> typing.Awaitable[None]:
         else:
             decoded = {}
         if decoded == {}:
-            logging.debug('packetizer decoded %s %s' % (timestamp, decoded))
+            logger.debug('packetizer decoded %s %s' % (timestamp, decoded))
             await connection.expire(timestamp, 3600)
             await connection.sadd('nontrivial_timestamps', timestamp)
         else:
-            logging.info('packetizer decoded %s %s' % (timestamp, decoded))
+            logger.info('packetizer decoded %s %s' % (timestamp, decoded))
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
             await connection.sadd('trivial_timestamps', timestamp)
@@ -370,12 +357,15 @@ async def register_session_box():
     import aiohttp
     relay_public_key = nacl.public.PublicKey(_constants.upstream_pubkey_bytes)
     human_name, uid = get_hardware_uid()
-    logging.info('human name: %s' % human_name)
+    print(human_name)
+    logger.info('human name: %s' % human_name)
     signed_message, session_box = create_box_semisealed(uid, relay_public_key)
+    url = f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/register'
     async with aiohttp.ClientSession() as session:
-        async with session.post(url=f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/register', data=signed_message) as resp:
+        async with session.post(url=url, data=signed_message) as resp:
             if resp.status == 200:
                 session_id = await resp.read()
+                print(session_id)
                 return (uid, session_id, session_box)
             else:
                 raise Exception('sproutwave session key setup failed')
@@ -394,7 +384,7 @@ async def packet_to_upstream(loop=None, box=None):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     samples = {}
     last_sent = time.time()
-    async for _, reading in pseudosub(connection, 'upstream_channel'):
+    async for timestamp, reading in pseudosub(connection, 'upstream_channel'):
         seen_multiple_times_recently = False
         if reading:
             seen_count = int(await connection.hget('sensor_uuid_counts', reading[1]) or '0')
@@ -406,11 +396,10 @@ async def packet_to_upstream(loop=None, box=None):
                 samples[reading[1] + 4096 * reading[2]] = reading
             if (time.time() > last_sent + max_update_interval):
                 update_samples = [x for x in samples.values()]
-                logging.info(pprint.pformat(update_samples))
+                logger.info(pprint.pformat(update_samples))
                 update_message = session_id+box.encrypt(zlib.compress(cbor.dumps(update_samples)))
                 sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
                 last_sent = time.time()
-
 
 async def packet_to_datastore() -> typing.Awaitable[None]:
     connection = await init_redis()
@@ -457,7 +446,7 @@ async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_
         now = time.time()
         ticks = await get_ticks(connection, key=key)
         for name, timestamp in ticks.items():
-            logging.info('name: %s, now: %d, last_timestamp: %d' % (name.decode(), now, timestamp))
+            logger.info('name: %s, now: %d, last_timestamp: %d' % (name.decode(), now, timestamp))
             if (now - timestamp) > timeout and name:
                 if send_pipe:
                     send_pipe.send(name)
@@ -467,25 +456,18 @@ async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_
 
 def diag():
     _diag = {'pyvers': sys.hexversion, 'exec': sys.executable, 'pid': os.getpid(), 'cwd': os.getcwd(), 'prefix': sys.exec_prefix, 'sys.path': sys.path}
-    logging.info(str(_diag))
+    logger.info(str(_diag))
     return _diag
 
 def main():
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
-    debug = '--debug' in sys.argv
-    if debug:
-        diag()
-        log_level = logging.DEBUG
-    else:
-        log_level = logging.INFO
-    logging.getLogger().setLevel(log_level)
     redis_server_process = handlebars.start_redis_server(redis_socket_path=data_dir+'sproutwave.sock')
     funcs = analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor, sensor_monitor
     proc_mapping = {}
     while True:
         for func in funcs:
             name = func.__name__
-            logging.info('(re)starting %s' % name)
+            logger.info('(re)starting %s' % name)
             if name in proc_mapping.keys():
                 proc_mapping[name].terminate()
             proc_mapping[name] = handlebars.multi_spawner(func)

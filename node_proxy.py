@@ -7,7 +7,7 @@ import functools as f
 import handlebars
 import _constants
 from aiohttp import web
-
+import logging
 import nacl.public
 
 logging.getLogger().setLevel(logging.DEBUG)
@@ -63,10 +63,11 @@ async def init_ws(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     msg = await ws.receive()
+    print(msg)
     uid = msg.data
     json_bytes = await redis_connection.hget('most_recent', uid)
     if json_bytes is not None:
-        await ws.send_str(json_bytes)
+        await ws.send_str(json_bytes.decode())
     while True:
         ws_closed = False
         ts, update_msg = await pseudosub1(redis_connection, uid, do_tick=False)
@@ -79,9 +80,11 @@ async def init_ws(request):
             json_bytes = None
         try:
             msg = await asyncio.wait_for(ws.receive(), 1)
+            print(msg)
             if msg.type in [aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING]:
                 break
         except asyncio.TimeoutError:
+            print(ws, 'timed out')
             pass
         if json_bytes:
             await redis_connection.hset('most_recent', uid, json_bytes)

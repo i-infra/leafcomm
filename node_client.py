@@ -8,11 +8,9 @@ async def test_ws():
         await test_ws.send_bytes(uid)
         while True:
             msg = await test_ws.receive()
+            print(msg)
             if msg.type in [aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING]:
-                print(msg)
                 break
-            else:
-                print(msg)
 while True:
     try:
         handlebars.multi_spawner(test_ws).join()
