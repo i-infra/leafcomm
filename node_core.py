@@ -375,34 +375,33 @@ async def register_session_box():
             else:
                 raise Exception('sproutwave session key setup failed')
 
-
 async def get_next_counter(counter_name, redis_connection):
-    new_counter_value = await redis_connection.hincrby('crypto_counter', counter_name, 1)
-    return new_counter_value
+    current_value = await redis_connection.hincrby('crypto_counter', counter_name, 1)
+    return current_value
 
-async def check_counter(counter_name, redis_connection, counter):
+async def check_counter(counter_name, redis_connection, current_value):
     last_counter = await redis_connection.hget('crypto_counter', counter_name)
     if not last_counter:
         last_counter = 0
-    if int(last_counter) < counter:
-        await redis_connection.hset('crypto_counter', counter_name, counter)
+    if int(last_counter) < current_value:
+        await redis_connection.hset('crypto_counter', counter_name, current_value)
         return True
     else:
-        print(f"{counter_name}: got {counter} expected at least {int(last_counter)+1}")
-        raise Exception('packer wrong')
+        raise Exception(f"{counter_name}: got {counter} expected at least {int(last_counter)+1}")
 
 def get_packer_unpacker(session_box, redis_connection, counter_name):
+    # TODO: padding and/or compression?
     async def packer(message):
         nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
         counter = await get_next_counter(counter_name, redis_connection)
         counter_bytes = counter.to_bytes(_constants.counter_width_bytes, 'little')
-        update_message = session_box.encrypt(counter_bytes + zlib.compress(cbor.dumps(message)), nonce)
-        return update_message
+        cyphertext = session_box.encrypt(counter_bytes + cbor.dumps(message), nonce)
+        return cyphertext
     async def unpacker(message):
         plaintext = session_box.decrypt(message)
         counter = int.from_bytes(plaintext[:_constants.counter_width_bytes], 'little')
         if await check_counter(counter_name, redis_connection, counter):
-            return cbor.loads(zlib.decompress(plaintext[_constants.counter_width_bytes:]))
+            return cbor.loads(plaintext[_constants.counter_width_bytes:])
     return packer, unpacker
 
 async def packet_to_upstream(loop=None, box=None):
