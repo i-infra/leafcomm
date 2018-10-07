@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import zlib
 import atexit
 import typing
 import pprint
@@ -12,6 +13,9 @@ import encodings
 import statistics
 import subprocess
 import multiprocessing
+
+import nacl
+import nacl.public
 import cbor
 import blosc
 import numpy
@@ -342,44 +346,73 @@ def get_hardware_uid() -> (str, bytes):
     human_name = '%s %s' % (colour, veggy)
     return (human_name, hashed)
 
+SESSION_ID_SIZE = NONCE_SIZE = nacl.public.Box.NONCE_SIZE
+PUBKEY_SIZE = nacl.public.PublicKey.SIZE
 
-def create_box_semisealed(to_box, public_key):
-    import nacl
+def create_ephemeral_box_from_pubkey_bytes(public_key_bytes = _constants.upstream_pubkey_bytes):
+    public_key = nacl.public.PublicKey(public_key_bytes)
     session_key = nacl.public.PrivateKey.generate()
     session_box = nacl.public.Box(session_key, public_key)
-    nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
-    boxed = session_box.encrypt(to_box, nonce)
-    return (session_key.public_key.encode() + boxed, session_box)
-
+    return session_key.public_key.encode(), session_box
 
 async def register_session_box():
-    import nacl.public
     import aiohttp
-    relay_public_key = nacl.public.PublicKey(_constants.upstream_pubkey_bytes)
     human_name, uid = get_hardware_uid()
     print(human_name)
     logger.info('human name: %s' % human_name)
-    signed_message, session_box = create_box_semisealed(uid, relay_public_key)
+    ephemeral_pubkey_bytes, session_box = create_ephemeral_box_from_pubkey_bytes()
+    redis_connection = await init_redis()
+    packer, unpacker = get_packer_unpacker(session_box, redis_connection, ephemeral_pubkey_bytes)
+    encrypted_msg = await packer(uid)
+    signed_message = ephemeral_pubkey_bytes+encrypted_msg
     url = f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/register'
     async with aiohttp.ClientSession() as session:
         async with session.post(url=url, data=signed_message) as resp:
             if resp.status == 200:
-                session_id = await resp.read()
-                print(session_id)
-                return (uid, session_id, session_box)
+                encrypted_session_id = await resp.read()
+                session_id = await unpacker(encrypted_session_id)
+                return (uid, session_id, packer)
             else:
                 raise Exception('sproutwave session key setup failed')
 
+
+async def get_next_counter(counter_name, redis_connection):
+    new_counter_value = await redis_connection.hincrby('crypto_counter', counter_name, 1)
+    return new_counter_value
+
+async def check_counter(counter_name, redis_connection, counter):
+    last_counter = await redis_connection.hget('crypto_counter', counter_name)
+    if not last_counter:
+        last_counter = 0
+    if int(last_counter) < counter:
+        await redis_connection.hset('crypto_counter', counter_name, counter)
+        return True
+    else:
+        print(f"{counter_name}: got {counter} expected at least {int(last_counter)+1}")
+        raise Exception('packer wrong')
+
+def get_packer_unpacker(session_box, redis_connection, counter_name):
+    async def packer(message):
+        nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
+        counter = await get_next_counter(counter_name, redis_connection)
+        counter_bytes = counter.to_bytes(_constants.counter_width_bytes, 'little')
+        update_message = session_box.encrypt(counter_bytes + zlib.compress(cbor.dumps(message)), nonce)
+        return update_message
+    async def unpacker(message):
+        plaintext = session_box.decrypt(message)
+        counter = int.from_bytes(plaintext[:_constants.counter_width_bytes], 'little')
+        if await check_counter(counter_name, redis_connection, counter):
+            return cbor.loads(zlib.decompress(plaintext[_constants.counter_width_bytes:]))
+    return packer, unpacker
 
 async def packet_to_upstream(loop=None, box=None):
     connection = await init_redis()
     await tick(connection)
     import socket
-    import zlib
     if loop == None:
         loop = asyncio.get_event_loop()
     if box == None:
-        uid, session_id, box = await register_session_box()
+        uid, session_id, packer = await register_session_box()
     max_update_interval = 1
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     samples = {}
@@ -396,9 +429,9 @@ async def packet_to_upstream(loop=None, box=None):
                 samples[reading[1] + 4096 * reading[2]] = reading
             if (time.time() > last_sent + max_update_interval):
                 update_samples = [x for x in samples.values()]
-                logger.info(pprint.pformat(update_samples))
-                update_message = session_id+box.encrypt(zlib.compress(cbor.dumps(update_samples)))
-                sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
+                print('submitting', pprint.pformat(update_samples))
+                update_message = await packer(update_samples)
+                sock.sendto(session_id+update_message, (_constants.upstream_host, _constants.upstream_port))
                 last_sent = time.time()
 
 async def packet_to_datastore() -> typing.Awaitable[None]:

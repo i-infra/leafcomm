@@ -8,7 +8,7 @@ import handlebars
 import _constants
 from aiohttp import web
 import logging
-import nacl.public
+import nacl
 
 logging.getLogger().setLevel(logging.DEBUG)
 
@@ -33,28 +33,39 @@ class ProxyDatagramProtocol(asyncio.DatagramProtocol):
 async def register_node(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
-    pubkey_bytes, uid = unbox_semisealed(posted_bytes)
+    pubkey_bytes = posted_bytes[:PUBKEY_SIZE]
+    session_box = nacl.public.Box(nacl.public.PrivateKey(_constants.upstream_privkey_bytes), nacl.public.PublicKey(pubkey_bytes))
+    packer, unpacker = get_packer_unpacker(session_box, connection, pubkey_bytes)
+    uid = await unpacker(posted_bytes[PUBKEY_SIZE:])
     session_id = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
+    encrypted_session_id = await packer(session_id)
     await connection.hset('session_pubkey_mapping', session_id, pubkey_bytes)
     await connection.hset('session_uid_mapping', session_id, uid)
-    return web.Response(body=session_id, status=200)
+    return web.Response(body=encrypted_session_id, status=200)
 
 async def redistribute(loop=None):
     redis_connection = await init_redis("proxy")
     boxes = {}
+    unpackers = {}
     async for ts, udp_bytes in pseudosub(redis_connection, 'udp_inbound'):
         if udp_bytes:
             session_id = udp_bytes[:SESSION_ID_SIZE]
             pubkey_bytes = await redis_connection.hget('session_pubkey_mapping', session_id)
             uid = await redis_connection.hget('session_uid_mapping', session_id)
             if pubkey_bytes and uid:
-                if pubkey_bytes in boxes.keys():
-                    box = boxes[pubkey_bytes]
+                if pubkey_bytes not in unpackers.keys():
+                    if pubkey_bytes in boxes.keys():
+                        box = boxes[pubkey_bytes]
+                    else:
+                        pubkey = nacl.public.PublicKey(pubkey_bytes)
+                        box = nacl.public.Box(relay_secret_key, pubkey)
+                        boxes[pubkey_bytes] = box
+                    # use a crypto_counter per session ID on the backend
+                    packer, unpacker = get_packer_unpacker(box, redis_connection, session_id)
+                    unpackers[session_id] = unpacker
                 else:
-                    pubkey = nacl.public.PublicKey(pubkey_bytes)
-                    box = nacl.public.Box(relay_secret_key, pubkey)
-                compressed_cbor_bytes = box.decrypt(udp_bytes[SESSION_ID_SIZE:])
-                update_msg = cbor.loads(zlib.decompress(compressed_cbor_bytes))
+                    unpacker = unpackers[session_id]
+                update_msg = await unpacker(udp_bytes[SESSION_ID_SIZE:])
                 await pseudopub(redis_connection, [uid], None, update_msg)
 
 async def init_ws(request):
@@ -63,30 +74,26 @@ async def init_ws(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     access_token = await ws.receive()
-    print(access_token)
     uid = access_token.data
     json_bytes = await redis_connection.hget('most_recent', uid)
     if json_bytes is not None:
         await ws.send_str(json_bytes.decode())
-    while True:
-        ts, update_msg = await pseudosub1(redis_connection, uid, timeout=1, do_tick=False)
+    async for ts, update_msg in pseudosub(redis_connection, uid, timeout=_constants.websocket_update_period):
         if update_msg:
             json_bytes = json.dumps(update_msg)
-            await ws.send_str(json_bytes)
             await redis_connection.hset('most_recent', uid, json_bytes)
+        json_bytes = await redis_connection.hget('most_recent', uid)
+        await ws.send_str(json_bytes.decode())
     return ws
-
-def unbox_semisealed(byte_blob, secret_key = relay_secret_key):
-    raw_pubkey = byte_blob[:PUBKEY_SIZE]
-    nacl_public_key = nacl.public.PublicKey(raw_pubkey)
-    boxed_contents = byte_blob[PUBKEY_SIZE:]
-    contents = nacl.public.Box(secret_key, nacl_public_key).decrypt(boxed_contents)
-    return raw_pubkey, contents
 
 async def signup(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
-    msg = cbor.loads(posted_bytes)
+    pubkey_bytes = posted_bytes[:PUBKEY_SIZE]
+    session_box = nacl.public.Box(nacl.public.PrivateKey(_constants.upstream_privkey_bytes), nacl.public.PublicKey(pubkey_bytes))
+    # counter per pubkey
+    packer, unpacker = get_packer_unpacker(session_box, connection, pubkey_bytes)
+    msg = unpacker(posted_bytes[PUBKEY_SIZE:])
     return web.json_response(msg)
 
 def create_app(loop):
