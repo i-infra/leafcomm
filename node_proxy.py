@@ -1,6 +1,5 @@
 from node_core import *
 import ssl
-import zlib
 import json
 import aiohttp
 import functools as f
