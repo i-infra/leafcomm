@@ -40,6 +40,7 @@ async def register_node(request):
     encrypted_session_id = await packer(session_id)
     await connection.hset('session_pubkey_mapping', session_id, pubkey_bytes)
     await connection.hset('session_uid_mapping', session_id, uid)
+    await connection.hset('session_time_mapping', session_id, time.time())
     return web.Response(body=encrypted_session_id, status=200)
 
 async def redistribute(loop=None):
@@ -73,6 +74,8 @@ async def init_ws(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     access_token = await ws.receive()
+    # TODO abstract this away, ws should receive an encrypted message prefixed with a session ID,
+    # use the session ID to look up the pubkey and node uid, and try and decrypt the message
     uid = access_token.data
     json_bytes = await redis_connection.hget('most_recent', uid)
     if json_bytes is not None:
@@ -85,14 +88,20 @@ async def init_ws(request):
         await ws.send_str(json_bytes.decode())
     return ws
 
-async def signup(request):
+async def start_authenticated_session(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
     pubkey_bytes = posted_bytes[:PUBKEY_SIZE]
     session_box = nacl.public.Box(nacl.public.PrivateKey(_constants.upstream_privkey_bytes), nacl.public.PublicKey(pubkey_bytes))
     # counter per pubkey
     packer, unpacker = get_packer_unpacker(session_box, connection, pubkey_bytes)
-    msg = unpacker(posted_bytes[PUBKEY_SIZE:])
+    msg = await unpacker(posted_bytes[PUBKEY_SIZE:])
+    if 'signup' in request.rel_url.path:
+        # TODO: parse msg for signup info, poke sqlite
+        msg = {'signup with': msg}
+    if 'login' in request.rel_url.path:
+        # TODO: check redis / sqlite for matching creds
+        msg = {'login with': msg}
     return web.json_response(msg)
 
 def create_app(loop):
@@ -104,7 +113,8 @@ def create_app(loop):
     app = web.Application()
     app.router.add_get('/ws', init_ws)
     app.router.add_post('/register', register_node)
-    app.router.add_post('/signup', signup)
+    app.router.add_post('/signup', start_authenticated_session)
+    app.router.add_post('/login', start_authenticated_session)
     app.on_startup.append(start_background_tasks)
     return app
 
