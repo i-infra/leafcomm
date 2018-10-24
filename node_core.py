@@ -345,58 +345,60 @@ def get_hardware_uid() -> (str, bytes):
     human_name = '%s %s' % (colour, veggy)
     return (human_name, hashed)
 
-SESSION_ID_SIZE = NONCE_SIZE = nacl.public.Box.NONCE_SIZE
+NONCE_SIZE = nacl.public.Box.NONCE_SIZE
 PUBKEY_SIZE = nacl.public.PublicKey.SIZE
-
-def create_ephemeral_box_from_pubkey_bytes(public_key_bytes = _constants.upstream_pubkey_bytes):
-    public_key = nacl.public.PublicKey(public_key_bytes)
-    session_key = nacl.public.PrivateKey.generate()
-    session_box = nacl.public.Box(session_key, public_key)
-    return session_key.public_key.encode(), session_box
 
 async def register_session_box():
     import aiohttp
     human_name, uid = get_hardware_uid()
     print(human_name)
     logger.info('human name: %s' % human_name)
-    ephemeral_pubkey_bytes, session_box = create_ephemeral_box_from_pubkey_bytes()
-    redis_connection = await init_redis()
-    packer, unpacker = get_packer_unpacker(session_box, redis_connection, ephemeral_pubkey_bytes)
+    packer, unpacker = get_packer_unpacker(await init_redis(), _constants.upstream_pubkey_bytes)
     encrypted_msg = await packer(uid)
-    signed_message = ephemeral_pubkey_bytes+encrypted_msg
     url = f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/register'
     async with aiohttp.ClientSession() as session:
-        async with session.post(url=url, data=signed_message) as resp:
+        async with session.post(url=url, data=encrypted_msg) as resp:
             if resp.status == 200:
                 encrypted_session_id = await resp.read()
                 session_id = await unpacker(encrypted_session_id)
-                return (uid, session_id, packer)
+                return (uid, packer)
             else:
                 raise Exception('sproutwave session key setup failed')
 
 async def get_next_counter(counter_name, redis_connection):
-    current_value = await redis_connection.hincrby('crypto_counter', counter_name, 1)
+    current_value = await redis_connection.hincrby('message_counters', counter_name, 1)
     return current_value
 
 async def check_counter(counter_name, redis_connection, current_value):
-    last_counter = await redis_connection.hget('crypto_counter', counter_name)
+    last_counter = await redis_connection.hget('message_counters', counter_name)
     if not last_counter:
         last_counter = 0
     if int(last_counter) < current_value:
-        await redis_connection.hset('crypto_counter', counter_name, current_value)
+        await redis_connection.hset('message_counters', counter_name, current_value)
         return True
     else:
-        raise Exception(f"{counter_name}: got {counter} expected at least {int(last_counter)+1}")
+        raise Exception(f"{counter_name.hex()}: got {current_value} expected at least {int(last_counter)+1}")
 
-def get_packer_unpacker(session_box, redis_connection, counter_name):
-    # TODO: padding and/or compression?
+def get_packer_unpacker(redis_connection, peer_pubkey_bytes, local_privkey_bytes = None):
+    # TODO: compression
+    version_tag = b'\x01'
+    peer_public_key = nacl.public.PublicKey(peer_pubkey_bytes)
+    if local_privkey_bytes is None:
+        local_privkey = nacl.public.PrivateKey.generate()
+    else:
+        local_privkey = nacl.public.PrivateKey(local_privkey_bytes)
+    session_box = nacl.public.Box(local_privkey, peer_public_key)
+    local_pubkey_bytes = local_privkey.public_key.encode()
+    counter_name = local_pubkey_bytes+peer_pubkey_bytes
     async def packer(message):
         nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
         counter = await get_next_counter(counter_name, redis_connection)
         counter_bytes = counter.to_bytes(_constants.counter_width_bytes, 'little')
         cyphertext = session_box.encrypt(counter_bytes + cbor.dumps(message), nonce)
-        return cyphertext
+        return version_tag+local_pubkey_bytes+cyphertext
     async def unpacker(message):
+        message_version = message.pop(1)
+        assert message_version == version_tag
         plaintext = session_box.decrypt(message)
         counter = int.from_bytes(plaintext[:_constants.counter_width_bytes], 'little')
         if await check_counter(counter_name, redis_connection, counter):
@@ -429,7 +431,7 @@ async def packet_to_upstream(loop=None, box=None):
                 update_samples = [x for x in samples.values()]
                 print('submitting', pprint.pformat(update_samples))
                 update_message = await packer(update_samples)
-                sock.sendto(session_id+update_message, (_constants.upstream_host, _constants.upstream_port))
+                sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
                 last_sent = time.time()
 
 async def packet_to_datastore() -> typing.Awaitable[None]:

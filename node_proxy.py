@@ -30,17 +30,17 @@ class ProxyDatagramProtocol(asyncio.DatagramProtocol):
         self.loop.create_task(pseudopub(self.connection, ['udp_inbound'], None, data))
 
 async def register_node(request):
+    # TODO: generalize this for multiple versions
     connection = request.app['redis']
     posted_bytes = await request.read()
-    pubkey_bytes = posted_bytes[:PUBKEY_SIZE]
-    session_box = nacl.public.Box(nacl.public.PrivateKey(_constants.upstream_privkey_bytes), nacl.public.PublicKey(pubkey_bytes))
-    packer, unpacker = get_packer_unpacker(session_box, connection, pubkey_bytes)
-    uid = await unpacker(posted_bytes[PUBKEY_SIZE:])
-    session_id = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
-    encrypted_session_id = await packer(session_id)
-    await connection.hset('session_pubkey_mapping', session_id, pubkey_bytes)
-    await connection.hset('session_uid_mapping', session_id, uid)
-    await connection.hset('session_time_mapping', session_id, time.time())
+    assert posted_bytes[0] == b'\x01'
+    pubkey_bytes = posted_bytes[1:PUBKEY_SIZE+1]
+    packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes = _constants.upstream_privkey_bytes)
+    uid = await unpacker(posted_bytes)
+    status = b'\x01'
+    encrypted_status = await packer(status)
+    await connection.hset('pubkey_uid_mapping', pubkey_bytes, uid)
+    await connection.hset('first_seen_pubkey', pubkey_bytes, time.time())
     return web.Response(body=encrypted_session_id, status=200)
 
 async def redistribute(loop=None):
@@ -49,24 +49,16 @@ async def redistribute(loop=None):
     unpackers = {}
     async for ts, udp_bytes in pseudosub(redis_connection, 'udp_inbound'):
         if udp_bytes:
-            session_id = udp_bytes[:SESSION_ID_SIZE]
-            pubkey_bytes = await redis_connection.hget('session_pubkey_mapping', session_id)
-            uid = await redis_connection.hget('session_uid_mapping', session_id)
-            if pubkey_bytes and uid:
-                if pubkey_bytes not in unpackers.keys():
-                    if pubkey_bytes in boxes.keys():
-                        box = boxes[pubkey_bytes]
-                    else:
-                        pubkey = nacl.public.PublicKey(pubkey_bytes)
-                        box = nacl.public.Box(relay_secret_key, pubkey)
-                        boxes[pubkey_bytes] = box
-                    # use a crypto_counter per session ID on the backend
-                    packer, unpacker = get_packer_unpacker(box, redis_connection, session_id)
-                    unpackers[session_id] = unpacker
-                else:
-                    unpacker = unpackers[session_id]
-                update_msg = await unpacker(udp_bytes[SESSION_ID_SIZE:])
-                await pseudopub(redis_connection, [uid], None, update_msg)
+            assert udp_bytes[0] == b'\x01'
+            pubkey_bytes = udp_bytes[1:PUBKEY_SIZE+1]
+            if pubkey_bytes not in unpackers.keys():
+                packer, unpacker = get_packer_unpacker(box, redis_connection, session_id)
+                unpackers[pubkey_bytes] = unpacker
+            else:
+                unpacker = unpackers[pubkey_bytes]
+            uid = await redis_connection.hget('pubkey_uid_mapping', pubkey_bytes)
+            update_msg = await unpacker(udp_bytes)
+            await pseudopub(redis_connection, [uid], None, update_msg)
 
 async def init_ws(request):
     redis_connection = await init_redis("proxy")
@@ -91,11 +83,10 @@ async def init_ws(request):
 async def start_authenticated_session(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
-    pubkey_bytes = posted_bytes[:PUBKEY_SIZE]
-    session_box = nacl.public.Box(nacl.public.PrivateKey(_constants.upstream_privkey_bytes), nacl.public.PublicKey(pubkey_bytes))
-    # counter per pubkey
-    packer, unpacker = get_packer_unpacker(session_box, connection, pubkey_bytes)
-    msg = await unpacker(posted_bytes[PUBKEY_SIZE:])
+    assert posted_bytes[0] == b'\x01'
+    pubkey_bytes = posted_bytes[1:PUBKEY_SIZE+1]
+    packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
+    msg = await unpacker(posted_bytes)
     if 'signup' in request.rel_url.path:
         # TODO: parse msg for signup info, poke sqlite
         msg = {'signup with': msg}
