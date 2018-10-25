@@ -339,7 +339,7 @@ def get_hardware_uid() -> (str, bytes):
     import nacl.encoding
     import glob
     import colourful_vegetables
-    hashed = nacl.hash.sha512(open(glob.glob('/sys/block/mmcblk*/device/cid')[0], 'rb').read(), encoder=nacl.encoding.RawEncoder)
+    hashed = nacl.hash.sha256(open(glob.glob('/sys/block/mmcblk*/device/cid')[0], 'rb').read(), encoder=nacl.encoding.RawEncoder)[0:8]
     colour = colourful_vegetables.colours[hashed[-1] >> 4]
     veggy = colourful_vegetables.vegetables[hashed[-1] & 15]
     human_name = '%s %s' % (colour, veggy)

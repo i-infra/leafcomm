@@ -9,6 +9,8 @@ from aiohttp import web
 import logging
 import nacl
 
+import user_datastore
+
 logging.getLogger().setLevel(logging.DEBUG)
 
 relay_secret_key = nacl.public.PrivateKey(_constants.upstream_privkey_bytes)
@@ -82,18 +84,28 @@ async def init_ws(request):
 
 async def start_authenticated_session(request):
     connection = request.app['redis']
+    users_db = request.app['users_db']
     posted_bytes = await request.read()
     assert posted_bytes[0] == 1
     pubkey_bytes = posted_bytes[1:PUBKEY_SIZE+1]
     packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
     msg = await unpacker(posted_bytes)
     if 'signup' in request.rel_url.path:
-        # TODO: parse msg for signup info, poke sqlite
-        msg = {'signup with': msg}
+        signup_required_fields = 'email name nodeSecret passwordHash passwordHint phone'.split()
+        for key in signup_required_fields:
+            assert msg.get(key) is not None
+        user_exists_check = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
+        if user_exists_check == user_datastore.status_enum.index('NO_SUCH_USER'):
+            success = users_db.add_user(msg.get('name'), msg.get('email'), msg.get('phone'), msg.get('passwordHash'), msg.get('passwordHint'), msg.get('nodeSecret'))
+        msg = ('signup', user_datastore.status_enum[user_exists_check])
     if 'login' in request.rel_url.path:
-        # TODO: check redis / sqlite for matching creds
-        msg = {'login with': msg}
-    return web.json_response(msg)
+        login_required_fields = ['email', 'passwordHash']
+        for key in login_required_fields:
+            assert msg.get(key) is not None
+        user_exists_check = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
+        msg = ('login', user_datastore.status_enum[user_exists_check])
+    encrypted_message = await packer(msg)
+    return web.Response(body=encrypted_message, content_type='application/octet-stream')
 
 def create_app(loop):
     async def start_background_tasks(app):
@@ -101,6 +113,7 @@ def create_app(loop):
         protocol = ProxyDatagramProtocol(loop, await init_redis("proxy"))
         app['udp_task'] = loop.create_task(loop.create_datagram_endpoint(lambda: protocol, local_addr=('0.0.0.0', _constants.upstream_port)))
         app['redistribute_task'] = loop.create_task(redistribute())
+        app['users_db'] = user_datastore.UserDatabase(db_name=f'{data_dir}/users_db.db')
     app = web.Application()
     app.router.add_get('/ws', init_ws)
     app.router.add_post('/register', register_node)
@@ -110,6 +123,8 @@ def create_app(loop):
     return app
 
 if __name__ == "__main__":
+    pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
+    redis_server_process = handlebars.start_redis_server(redis_socket_path=data_dir+'sproutwave.sock')
     diag()
     handlebars.start_redis_server(redis_socket_path=data_dir+'proxysproutwave.sock')
     loop = asyncio.get_event_loop()

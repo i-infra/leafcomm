@@ -5,6 +5,12 @@ import uuid
 
 alert_default=""
 
+status_enum = ['WRONG_PASSWORD', 'NO_SUCH_USER', 'SUCCESS']
+
+WRONG_PASSWORD=0
+NO_SUCH_USER=1
+SUCCESS=2
+
 class UserDatabase(object):
 
     def __init__(self, db_name = 'user_config.db'):
@@ -13,32 +19,37 @@ class UserDatabase(object):
             db_name = temp_log_dir+'/'+db_name
         self.db_name = db_name
         self.conn = sql.connect(db_name)
-        init_users = 'CREATE TABLE IF NOT EXISTS users (UID INTEGER PRIMARY KEY, Name TEXT, \
-                Email TEXT, Phone TEXT, PasswordHash BLOB, PasswordMeta BLOB, NodeID TEXT, Alerts BLOB, AppSettings BLOB)'
+        init_users = 'CREATE TABLE IF NOT EXISTS users (Name TEXT, Email TEXT, Phone TEXT, PasswordHash BLOB, PasswordMeta BLOB, NodeID TEXT, Alerts BLOB, AppSettings BLOB)'
         self.conn.execute(init_users)
-        create_index = 'CREATE INDEX IF NOT EXISTS ON users (Email ASC)'
+        create_index = 'CREATE INDEX IF NOT EXISTS users_index on users (Email ASC)'
         self.conn.execute(create_index)
         self.conn.commit()
         self.cursor = self.conn.cursor()
 
     def check_user(self, email, password_hash):
-        if stop == -1:
-            stop = time.time()
-        selector = 'SELECT * FROM users WHERE Email is %s' % str(email)
-        users = self.cursor.execute(selector)
+        selector = 'SELECT * FROM users WHERE email=?'
+        users = self.cursor.execute(selector, (email,)).fetchall()
         if users:
-            uid, name, email, phone, password_hash_stored, password_meta_stored, alerts = users[0]
-            if False in [x == y for (x,y) in zip(password_hash_stored, password_hash)]:
-                return None
+            name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[0]
+            if any([x != y for (x,y) in zip(password_hash_stored, password_hash)]):
+                return WRONG_PASSWORD
             else:
-                return User(name, email, phone, alerts)
+                return SUCCESS
+        return NO_SUCH_USER
+
+    def get_user_settings(self, email, password_hash):
+        selector = 'SELECT * FROM users WHERE email=?'
+        user = self.cursor.execute(selector, (email,)).fetchone()
+        name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = user
+        if False not in [x == y for (x,y) in zip(password_hash_stored, password_hash)]:
+            return (name, email, phone, node_id, alerts, app_settings)
 
     def update_user(self, *args, **kwargs):
         raise NotImplemented
 
     def update_alerts(self, email, alerts):
-        command = "UPDATE users SET Alerts = '%s' WHERE email = '%s';" % (json.dumps(alerts), email)
-        return self.cursor.execute(command)
+        command = "UPDATE users SET Alerts=? WHERE email=?"
+        return self.cursor.execute(command, (json.dumps(alerts), email))
 
     def get_users_and_alerts(self):
         selector = "SELECT (UID, NodeID, Alerts) FROM users"
@@ -46,10 +57,12 @@ class UserDatabase(object):
         return alerts
 
     def update_app_settings(self):
+        raise NotImplemented
         # localization, units, etc
 
-    def add_user(self, name, email, phone, password_hash, password_meta):
-        inserter = "INSERT INTO readings VALUES(?, ?, ?, ?, ?)"
-        data = (name, email, phone, password_hash, password_meta, alert_defaults)
+    def add_user(self, name, email, phone, password_hash, password_meta, node_id, alert_defaults = '', app_settings = ''):
+        inserter = "INSERT INTO users VALUES(?, ?, ?, ?, ?, ?, '', '')"
+        data = (name, email, phone, password_hash, password_meta, node_id)
         self.cursor.executemany(inserter, [data])
-        return self.conn.commit()
+        self.conn.commit()
+        return SUCCESS
