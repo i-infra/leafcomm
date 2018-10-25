@@ -4,9 +4,8 @@ import _constants
 
 async def test_signup():
     redis_connection = await init_redis()
-    pubkey_bytes, session_box = create_ephemeral_box_from_pubkey_bytes()
-    packer, unpacker = get_packer_unpacker(session_box, redis_connection, pubkey_bytes)
-    msg = pubkey_bytes+(await packer({'hello': 'friend'}))
+    packer, unpacker = get_packer_unpacker(redis_connection, _constants.upstream_pubkey_bytes)
+    msg = await packer({'hello': 'friend'})
     async with aiohttp.client.ClientSession() as client:
         async with client.post(url=f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/signup', data=msg) as resp:
             resp_bytes = await resp.read()

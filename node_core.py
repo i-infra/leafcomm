@@ -351,7 +351,6 @@ PUBKEY_SIZE = nacl.public.PublicKey.SIZE
 async def register_session_box():
     import aiohttp
     human_name, uid = get_hardware_uid()
-    print(human_name)
     logger.info('human name: %s' % human_name)
     packer, unpacker = get_packer_unpacker(await init_redis(), _constants.upstream_pubkey_bytes)
     encrypted_msg = await packer(uid)
@@ -359,8 +358,8 @@ async def register_session_box():
     async with aiohttp.ClientSession() as session:
         async with session.post(url=url, data=encrypted_msg) as resp:
             if resp.status == 200:
-                encrypted_session_id = await resp.read()
-                session_id = await unpacker(encrypted_session_id)
+                encrypted_status = await resp.read()
+                status = await unpacker(encrypted_status)
                 return (uid, packer)
             else:
                 raise Exception('sproutwave session key setup failed')
@@ -382,6 +381,7 @@ async def check_counter(counter_name, redis_connection, current_value):
 def get_packer_unpacker(redis_connection, peer_pubkey_bytes, local_privkey_bytes = None):
     # TODO: compression
     version_tag = b'\x01'
+    version_int = int.from_bytes(version_tag, 'little')
     peer_public_key = nacl.public.PublicKey(peer_pubkey_bytes)
     if local_privkey_bytes is None:
         local_privkey = nacl.public.PrivateKey.generate()
@@ -397,22 +397,21 @@ def get_packer_unpacker(redis_connection, peer_pubkey_bytes, local_privkey_bytes
         cyphertext = session_box.encrypt(counter_bytes + cbor.dumps(message), nonce)
         return version_tag+local_pubkey_bytes+cyphertext
     async def unpacker(message):
-        message_version = message.pop(1)
-        assert message_version == version_tag
-        plaintext = session_box.decrypt(message)
+        message_version = message[0]
+        assert message_version == version_int
+        plaintext = session_box.decrypt(message[1+PUBKEY_SIZE:])
         counter = int.from_bytes(plaintext[:_constants.counter_width_bytes], 'little')
         if await check_counter(counter_name, redis_connection, counter):
             return cbor.loads(plaintext[_constants.counter_width_bytes:])
     return packer, unpacker
 
-async def packet_to_upstream(loop=None, box=None):
+async def packet_to_upstream(loop=None):
     connection = await init_redis()
     await tick(connection)
     import socket
     if loop == None:
         loop = asyncio.get_event_loop()
-    if box == None:
-        uid, session_id, packer = await register_session_box()
+    uid, packer = await register_session_box()
     max_update_interval = 1
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     samples = {}
@@ -429,7 +428,7 @@ async def packet_to_upstream(loop=None, box=None):
                 samples[reading[1] + 4096 * reading[2]] = reading
             if (time.time() > last_sent + max_update_interval):
                 update_samples = [x for x in samples.values()]
-                print('submitting', pprint.pformat(update_samples))
+                logger.info(f'submitting {pprint.pformat(update_samples)}')
                 update_message = await packer(update_samples)
                 sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
                 last_sent = time.time()
@@ -449,12 +448,13 @@ async def band_monitor(connection=None):
     await asyncio.sleep(handlebars.r1dx(20))
     while True:
         good_stats = await connection.hgetall('good_block')
-        print('FREQ\t\tOK\tNO')
+        msg = ['FREQ\t\tOK\tNO']
         for freq, count in sorted(good_stats.items()):
             failed = await connection.hget('short_block', freq)
             if failed == None:
                 failed = b'0'
-            print(f'{freq.decode()}\t{count.decode()}\t{failed.decode()}')
+            msg += [f'{freq.decode()}\t{count.decode()}\t{failed.decode()}']
+        logger.info('\n'.join(msg))
         await asyncio.sleep(60)
 
 async def sensor_monitor(connection=None):
@@ -465,9 +465,10 @@ async def sensor_monitor(connection=None):
         sensor_uuid_counts = await connection.hgetall('sensor_uuid_counts')
         sensor_last_seen = await connection.hgetall('sensor_uuid_timestamps')
         now = time.time()
-        print('UUID\tCOUNT\tLAST SEEN')
+        msg = ['UUID\tCOUNT\tLAST SEEN']
         for uid, count in sorted(sensor_uuid_counts.items()):
-            print('%s\t%s\t%d' % (uid.decode(), count.decode(), now-float(sensor_last_seen[uid])))
+            msg += ['%s\t%s\t%d' % (uid.decode(), count.decode(), now-float(sensor_last_seen[uid]))]
+        logger.info('\n'.join(msg))
         await asyncio.sleep(60)
 
 async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_pipe=None):

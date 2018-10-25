@@ -33,7 +33,7 @@ async def register_node(request):
     # TODO: generalize this for multiple versions
     connection = request.app['redis']
     posted_bytes = await request.read()
-    assert posted_bytes[0] == b'\x01'
+    assert posted_bytes[0] == 1
     pubkey_bytes = posted_bytes[1:PUBKEY_SIZE+1]
     packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes = _constants.upstream_privkey_bytes)
     uid = await unpacker(posted_bytes)
@@ -41,23 +41,23 @@ async def register_node(request):
     encrypted_status = await packer(status)
     await connection.hset('pubkey_uid_mapping', pubkey_bytes, uid)
     await connection.hset('first_seen_pubkey', pubkey_bytes, time.time())
-    return web.Response(body=encrypted_session_id, status=200)
+    return web.Response(body=encrypted_status, status=200)
 
 async def redistribute(loop=None):
     redis_connection = await init_redis("proxy")
-    boxes = {}
     unpackers = {}
     async for ts, udp_bytes in pseudosub(redis_connection, 'udp_inbound'):
         if udp_bytes:
-            assert udp_bytes[0] == b'\x01'
+            assert udp_bytes[0] == 1
             pubkey_bytes = udp_bytes[1:PUBKEY_SIZE+1]
             if pubkey_bytes not in unpackers.keys():
-                packer, unpacker = get_packer_unpacker(box, redis_connection, session_id)
+                packer, unpacker = get_packer_unpacker(redis_connection, pubkey_bytes, local_privkey_bytes = _constants.upstream_privkey_bytes)
                 unpackers[pubkey_bytes] = unpacker
             else:
                 unpacker = unpackers[pubkey_bytes]
             uid = await redis_connection.hget('pubkey_uid_mapping', pubkey_bytes)
             update_msg = await unpacker(udp_bytes)
+            logger.info(f'{uid.hex()} {update_msg}')
             await pseudopub(redis_connection, [uid], None, update_msg)
 
 async def init_ws(request):
@@ -83,7 +83,7 @@ async def init_ws(request):
 async def start_authenticated_session(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
-    assert posted_bytes[0] == b'\x01'
+    assert posted_bytes[0] == 1
     pubkey_bytes = posted_bytes[1:PUBKEY_SIZE+1]
     packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
     msg = await unpacker(posted_bytes)
