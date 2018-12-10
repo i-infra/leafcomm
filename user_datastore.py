@@ -1,15 +1,29 @@
+from dataclasses import dataclass
 import sqlite3 as sql
 import time
 import tempfile
 import uuid
+from enum import Enum
+
 
 alert_default=""
 
-status_enum = ['WRONG_PASSWORD', 'NO_SUCH_USER', 'SUCCESS']
+class Status(Enum):
+    WRONG_PASSWORD=0
+    NO_SUCH_USER=1
+    SUCCESS=2
 
-WRONG_PASSWORD=0
-NO_SUCH_USER=1
-SUCCESS=2
+@dataclass
+class User:
+    name: str
+    email: str
+    phone: str
+    password_hash: bytes
+    password_meta: str
+    node_id: str
+    alerts: bytes
+    app_settings: bytes
+
 
 class UserDatabase(object):
 
@@ -32,17 +46,16 @@ class UserDatabase(object):
         if users:
             name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[0]
             if any([x != y for (x,y) in zip(password_hash_stored, password_hash)]):
-                return WRONG_PASSWORD
+                return Status.WRONG_PASSWORD, None
             else:
-                return SUCCESS
-        return NO_SUCH_USER
+                return Status.SUCCESS, User(*users[0])
+        return Status.NO_SUCH_USER, None
 
     def get_user_settings(self, email, password_hash):
         selector = 'SELECT * FROM users WHERE email=?'
-        user = self.cursor.execute(selector, (email,)).fetchone()
-        name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = user
-        if False not in [x == y for (x,y) in zip(password_hash_stored, password_hash)]:
-            return (name, email, phone, node_id, alerts, app_settings)
+        user = User(*self.cursor.execute(selector, (email,)).fetchone())
+        if all([x == y for (x,y) in zip(user.password_hash, password_hash)]):
+            return user
 
     def update_user(self, *args, **kwargs):
         raise NotImplemented

@@ -8,7 +8,7 @@ import _constants
 from aiohttp import web
 import logging
 import nacl
-
+import dataclasses
 import user_datastore
 
 logging.getLogger().setLevel(logging.DEBUG)
@@ -60,27 +60,8 @@ async def redistribute(loop=None):
             uid = await redis_connection.hget('pubkey_uid_mapping', pubkey_bytes)
             update_msg = await unpacker(udp_bytes)
             logger.info(f'{uid.hex()} {update_msg}')
+            await redis_connection.hset('most_recent', uid, cbor.dumps(update_msg))
             await pseudopub(redis_connection, [uid], None, update_msg)
-
-async def init_ws(request):
-    redis_connection = await init_redis("proxy")
-    logging.debug('ws request started')
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-    access_token = await ws.receive()
-    # TODO abstract this away, ws should receive an encrypted message prefixed with a session ID,
-    # use the session ID to look up the pubkey and node uid, and try and decrypt the message
-    uid = access_token.data
-    json_bytes = await redis_connection.hget('most_recent', uid)
-    if json_bytes is not None:
-        await ws.send_str(json_bytes.decode())
-    async for ts, update_msg in pseudosub(redis_connection, uid, timeout=_constants.websocket_update_period):
-        if update_msg:
-            json_bytes = json.dumps(update_msg)
-            await redis_connection.hset('most_recent', uid, json_bytes)
-        json_bytes = await redis_connection.hget('most_recent', uid)
-        await ws.send_str(json_bytes.decode())
-    return ws
 
 async def start_authenticated_session(request):
     connection = request.app['redis']
@@ -93,19 +74,40 @@ async def start_authenticated_session(request):
     if 'signup' in request.rel_url.path:
         signup_required_fields = 'email name nodeSecret passwordHash passwordHint phone'.split()
         for key in signup_required_fields:
-            assert msg.get(key) is not None
-        user_exists_check = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
-        if user_exists_check == user_datastore.status_enum.index('NO_SUCH_USER'):
-            success = users_db.add_user(msg.get('name'), msg.get('email'), msg.get('phone'), msg.get('passwordHash'), msg.get('passwordHint'), msg.get('nodeSecret'))
-        msg = ('signup', user_datastore.status_enum[user_exists_check])
+            assert msg.get(key)
+        user_signin_status, user_info = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
+        if user_signin_status == user_datastore.Status.NO_SUCH_USER:
+            user_signin_status = users_db.add_user(msg.get('name'), msg.get('email'), msg.get('phone'), msg.get('passwordHash'), msg.get('passwordHint'), msg.get('nodeSecret'))
+        msg = ('signup', str(user_signin_status), dataclasses.asdict(user_info))
     if 'login' in request.rel_url.path:
         login_required_fields = ['email', 'passwordHash']
         for key in login_required_fields:
-            assert msg.get(key) is not None
-        user_exists_check = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
-        msg = ('login', user_datastore.status_enum[user_exists_check])
+            assert msg.get(key)
+        user_signin_status, user_info = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
+        msg = ('login', str(user_signin_status), dataclasses.asdict(user_info))
+    if user_signin_status == user_datastore.Status.SUCCESS:
+        await connection.hset('authed_user_pubkey_uid_mapping', pubkey_bytes, user_info.node_id)
+        print('saved pubkey as authed', pubkey_bytes, user_info)
     encrypted_message = await packer(msg)
     return web.Response(body=encrypted_message, content_type='application/octet-stream')
+
+async def get_latest(request):
+    connection = request.app['redis']
+    posted_bytes = await request.read()
+    assert posted_bytes[0] == 1
+    pubkey_bytes = posted_bytes[1:PUBKEY_SIZE+1]
+    print('pubkey_bytes', pubkey_bytes)
+    packer_unpacker = request.app['packers'].get(pubkey_bytes)
+    if packer_unpacker:
+        packer, unpacker = packer_unpacker
+    else:
+        packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
+    uid = await connection.hget('authed_user_pubkey_uid_mapping', pubkey_bytes)
+    msg = await unpacker(posted_bytes)
+    latest = await connection.hget('most_recent', bytes.fromhex(uid.decode()))
+    encrypted_message = await packer(cbor.loads(latest))
+    return web.Response(body=encrypted_message, content_type='application/octet-stream')
+
 
 def create_app(loop):
     async def start_background_tasks(app):
@@ -114,8 +116,10 @@ def create_app(loop):
         app['udp_task'] = loop.create_task(loop.create_datagram_endpoint(lambda: protocol, local_addr=('0.0.0.0', _constants.upstream_port)))
         app['redistribute_task'] = loop.create_task(redistribute())
         app['users_db'] = user_datastore.UserDatabase(db_name=f'{data_dir}/users_db.db')
+        app['packers'] = {}
     app = web.Application()
-    app.router.add_get('/ws', init_ws)
+    #app.router.add_get('/ws', init_ws)
+    app.router.add_post('/latest', get_latest)
     app.router.add_post('/register', register_node)
     app.router.add_post('/signup', start_authenticated_session)
     app.router.add_post('/login', start_authenticated_session)
