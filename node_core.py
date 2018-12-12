@@ -8,13 +8,12 @@ import pathlib
 import itertools
 import statistics
 
-import nacl
-import nacl.public
-import cbor
 import blosc
 import numpy
 import bottleneck
 import ts_datastore as tsd
+
+from node_comms import *
 
 import handlebars
 import _constants
@@ -85,46 +84,8 @@ def packed_bytes_to_iq(samples: bytes) -> numpy.ndarray:
 def init_redis(preface=''):
     return handlebars.init_redis(data_dir+preface+'sproutwave.sock')
 
-async def tick(connection, function_name_depth=1, key='sproutwave_ticks'):
-    name = handlebars.get_function_name(function_name_depth)
-    await connection.hset(key, name, time.time())
-
-
-async def get_ticks(connection=None, key='sproutwave_ticks'):
-    if connection == None:
-        connection = await init_redis()
-    resp = await connection.hgetall(key)
-    return {x: float(y) for (x,y) in resp.items()}
-
-
-async def pseudopub(connection, channels, timestamp = None, info = None):
-    if isinstance(channels, str):
-        channels = [channels]
-    if not timestamp:
-        timestamp = time.time()
-    await connection.set(timestamp, cbor.dumps(info))
-    for channel in channels:
-        await connection.lpush(channel, timestamp)
-    await connection.expireat(timestamp, int(timestamp + 600))
-
-
-async def pseudosub(connection, channel, timeout=360):
-    while True:
-        res = await pseudosub1(connection, channel, timeout)
-        if res:
-            yield res
-
-
-async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):
-    channel, timestamp = await connection.brpop(channel, timeout)
-    info = await connection.get(timestamp)
-    if do_tick == True:
-        await tick(connection, function_name_depth=depth)
-    if info is not None:
-        return (float(timestamp), cbor.loads(info))
-
 def get_new_center():
-    return int(433800000.0) + int(time.time() * 10) % 10 * 20000
+    return 433_800_000 + handlebars.r1dx()*100_000
 
 async def analog_to_block() -> typing.Awaitable[None]:
     import gc
@@ -184,6 +145,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
 
 
 def block_to_pulses(compressed_block: Info, smoother: FilterFunc=brickwall) -> numpy.ndarray:
+    """ takes a compressed block of analog samples, takes magnitude, amplitude-thresholds and returns pulses """
     beep_samples = decompress(**compressed_block)
     shape = beep_samples.shape
     beep_absolute = numpy.empty(shape, dtype='float32')
@@ -196,6 +158,7 @@ def block_to_pulses(compressed_block: Info, smoother: FilterFunc=brickwall) -> n
 
 
 def pulses_to_deciles(pulses: numpy.ndarray) -> Deciles:
+    """ takes an array of run-length encoded pulses, finds centroids for 'long' and 'short' """
     values = numpy.unique(pulses.T[1])
     deciles = {}
     if len(pulses) < 10:
@@ -212,11 +175,16 @@ def pulses_to_deciles(pulses: numpy.ndarray) -> Deciles:
 
 
 def pulses_to_breaks(pulses: numpy.ndarray, deciles: Deciles) -> typing.List[int]:
+    """ with pulse array and definition of 'long' and 'short' pulses, find position of repeated packets """
+    # heuristic - cutoff duration for a break between subsequent packets is at least 9x
+    #  the smallest of the 'long' and 'short' pulses
     cutoff = min(deciles[0][0], deciles[1][0]) * 9
     breaks = numpy.logical_and(pulses.T[0] > cutoff, pulses.T[1] == L).nonzero()[0]
     break_deltas = numpy.diff(breaks)
+    # heuristic - "packet" "repeated" with fewer than 5 separations or more than 50 breaks is no good
     if len(breaks) > 50 or len(breaks) < 5:
         return []
+    # heuristic - if more than 3 different spacings between detected repeated packets, tighten up purposed breaks
     elif len(numpy.unique(break_deltas[numpy.where(break_deltas > 3)])) > 3:
         try:
             d_mode = statistics.mode([bd for bd in break_deltas if bd > 3])
@@ -231,6 +199,7 @@ def pulses_to_breaks(pulses: numpy.ndarray, deciles: Deciles) -> typing.List[int
 
 
 def demodulator(pulses: numpy.ndarray) -> typing.Iterable[Packet]:
+    """ high level demodulator function accepting a pulse array and yielding 0 or more Packets """
     deciles = pulses_to_deciles(pulses)
     if deciles == {}:
         return []
@@ -251,18 +220,20 @@ def demodulator(pulses: numpy.ndarray) -> typing.Iterable[Packet]:
             if not valid:
                 errors += [chip]
                 bits.append(E)
+        # heuristic - don't have packets with fewer than 4 bits
         if len(bits) > 4:
             result = Packet(bits, errors, deciles, pulses[x:y])
             yield result
 
 
 def silver_sensor(packet: Packet) -> typing.Dict:
+    """ hardware specific demodulation function for the two types of silver sensors """
     if packet.errors == []:
         bits = [x[0] == 2 for x in handlebars.rle(packet.packet) if x[1] == 0]
         if len(bits) == 42:
-            fields = [0, 2, 8, 2, 2, 4, 4, 4, 4, 4, 8]
-            fields = [x for x in itertools.accumulate(fields)]
-            results = [handlebars.debinary(bits[x:y]) for x, y in zip(fields, fields[1:])]
+            field_bitwidths = [0, 2, 8, 2, 2, 4, 4, 4, 4, 4, 8]
+            field_positions = [x for x in itertools.accumulate(field_bitwidths)]
+            results = [handlebars.debinary(bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
             if results[1] == 255:
                 return {}
             temp = 16 ** 2 * results[6] + 16 * results[5] + results[4]
@@ -273,26 +244,30 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             temp /= 10
             temp -= 32
             temp *= 5 / 9
+            open(f'{len(bits)}_bits', 'a').write(''.join([{True:'1',False:'0'}[bit] for bit in bits])+'\n')
             return {'uid': results[1], 'temperature': temp, 'humidity': humidity, 'channel': results[3]}
         elif len(bits) == 36:
-            fields = [0] + [4] * 9
-            fields = [x for x in itertools.accumulate(fields)]
-            n = [handlebars.debinary(bits[x:y]) for x, y in zip(fields, fields[1:])]
+            field_bitwidths = [0] + [4] * 9
+            field_positions = [x for x in itertools.accumulate(field_bitwidths)]
+            n = [handlebars.debinary(bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
             model = n[0]
             uid = n[1] << 4 | n[2]
             temp = n[4] << 8 | n[5] << 4 | n[6]
+            rh = n[7] * 16 + n[8]
             if temp >= 3840:
                 temp -= 4096
+            temp /= 10
             channel = n[3] & 3
             battery_ok = 8 & n[2] == 0
-            temp /= 10
-            rh = n[7] * 16 + n[8]
             if n[0] == 5:
+                open(f'{len(bits)}_bits', 'a').write(''.join([{True:'1',False:'0'}[bit] for bit in bits])+'\n')
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return {}
 
 
-def pulses_to_packet(pulses: numpy.ndarray) -> typing.Dict:
+def pulses_to_samples(pulses: numpy.ndarray) -> typing.Dict:
+    """ high-level function accepting RLE'd pulses and returning a sample from a silver sensor if present """
+    # heuristic - don't process short collections of pulses
     if len(pulses) > 10:
         for packet in demodulator(pulses):
             res = silver_sensor(packet)
@@ -304,12 +279,14 @@ def pulses_to_packet(pulses: numpy.ndarray) -> typing.Dict:
 
 
 async def block_to_packet() -> typing.Awaitable[None]:
+    """ worker function which waits for blocks of samples in redis queue, attempts to demodulate / decode to T&H.
+    does housekeeping"""
     connection = await init_redis()
     async for timestamp, info in pseudosub(connection, 'eof_timestamps'):
         if info is not None:
             for filter_func in filters:
                 pulses = block_to_pulses(info, filter_func)
-                decoded = pulses_to_packet(pulses)
+                decoded = pulses_to_samples(pulses)
                 if decoded != {}:
                     break
         else:
@@ -317,12 +294,12 @@ async def block_to_packet() -> typing.Awaitable[None]:
         if decoded == {}:
             logger.debug('packetizer decoded %s %s' % (timestamp, decoded))
             await connection.expire(timestamp, 3600)
-            await connection.sadd('nontrivial_timestamps', timestamp)
+            await connection.sadd('fail_timestamps', timestamp)
         else:
             logger.info('packetizer decoded %s %s' % (timestamp, decoded))
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
-            await connection.sadd('trivial_timestamps', timestamp)
+            await connection.sadd('success_timestamps', timestamp)
             await connection.hincrby('sensor_uuid_counts', decoded['uid'], 1)
             await connection.hset('sensor_uuid_timestamps', decoded['uid'], timestamp)
             await connection.expire(timestamp, 120)
@@ -330,6 +307,7 @@ async def block_to_packet() -> typing.Awaitable[None]:
 
 
 def get_hardware_uid() -> (str, bytes):
+    """ get human name and hash of SD card CID """
     import nacl.hash
     import nacl.encoding
     import glob
@@ -340,10 +318,8 @@ def get_hardware_uid() -> (str, bytes):
     human_name = '%s %s' % (colour, veggy)
     return (human_name, hashed)
 
-NONCE_SIZE = nacl.public.Box.NONCE_SIZE
-PUBKEY_SIZE = nacl.public.PublicKey.SIZE
-
 async def register_session_box():
+    """ register node with backend. """
     import aiohttp
     human_name, uid = get_hardware_uid()
     logger.info('human name: %s' % human_name)
@@ -358,47 +334,6 @@ async def register_session_box():
                 return (uid, packer)
             else:
                 raise Exception('sproutwave session key setup failed')
-
-async def get_next_counter(counter_name, redis_connection):
-    current_value = await redis_connection.hincrby('message_counters', counter_name, 1)
-    return current_value
-
-async def check_counter(counter_name, redis_connection, current_value):
-    last_counter = await redis_connection.hget('message_counters', counter_name)
-    if not last_counter:
-        last_counter = 0
-    if int(last_counter) < current_value:
-        await redis_connection.hset('message_counters', counter_name, current_value)
-        return True
-    else:
-        raise Exception(f"{counter_name.hex()}: got {current_value} expected at least {int(last_counter)+1}")
-
-def get_packer_unpacker(redis_connection, peer_pubkey_bytes, local_privkey_bytes = None):
-    # TODO: compression
-    version_tag = b'\x01'
-    version_int = int.from_bytes(version_tag, 'little')
-    peer_public_key = nacl.public.PublicKey(peer_pubkey_bytes)
-    if local_privkey_bytes is None:
-        local_privkey = nacl.public.PrivateKey.generate()
-    else:
-        local_privkey = nacl.public.PrivateKey(local_privkey_bytes)
-    session_box = nacl.public.Box(local_privkey, peer_public_key)
-    local_pubkey_bytes = local_privkey.public_key.encode()
-    counter_name = local_pubkey_bytes+peer_pubkey_bytes
-    async def packer(message):
-        nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
-        counter = await get_next_counter(counter_name, redis_connection)
-        counter_bytes = counter.to_bytes(_constants.counter_width_bytes, 'little')
-        cyphertext = session_box.encrypt(counter_bytes + cbor.dumps(message), nonce)
-        return version_tag+local_pubkey_bytes+cyphertext
-    async def unpacker(message):
-        message_version = message[0]
-        assert message_version == version_int
-        plaintext = session_box.decrypt(message[1+PUBKEY_SIZE:])
-        counter = int.from_bytes(plaintext[:_constants.counter_width_bytes], 'little')
-        if await check_counter(counter_name, redis_connection, counter):
-            return cbor.loads(plaintext[_constants.counter_width_bytes:])
-    return packer, unpacker
 
 async def packet_to_upstream(loop=None):
     connection = await init_redis()

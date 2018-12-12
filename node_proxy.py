@@ -1,4 +1,4 @@
-from node_core import *
+from node_comms import *
 import ssl
 import json
 import aiohttp
@@ -7,16 +7,19 @@ import handlebars
 import _constants
 from aiohttp import web
 import logging
+import asyncio
 import nacl
 import dataclasses
 import user_datastore
+import pathlib
+import os
 
 logging.getLogger().setLevel(logging.DEBUG)
 
-relay_secret_key = nacl.public.PrivateKey(_constants.upstream_privkey_bytes)
+data_dir = os.path.expanduser('~/.sproutwave/')
 
-PUBKEY_SIZE = nacl.public.PublicKey.SIZE
-SESSION_ID_SIZE = NONCE_SIZE = nacl.public.Box.NONCE_SIZE
+def init_redis(preface=''):
+    return handlebars.init_redis(data_dir+preface+'sproutwave.sock')
 
 class ProxyDatagramProtocol(asyncio.DatagramProtocol):
 
@@ -87,7 +90,6 @@ async def start_authenticated_session(request):
         msg = ('login', str(user_signin_status), dataclasses.asdict(user_info))
     if user_signin_status == user_datastore.Status.SUCCESS:
         await connection.hset('authed_user_pubkey_uid_mapping', pubkey_bytes, user_info.node_id)
-        print('saved pubkey as authed', pubkey_bytes, user_info)
     encrypted_message = await packer(msg)
     return web.Response(body=encrypted_message, content_type='application/octet-stream')
 
@@ -96,7 +98,6 @@ async def get_latest(request):
     posted_bytes = await request.read()
     assert posted_bytes[0] == 1
     pubkey_bytes = posted_bytes[1:PUBKEY_SIZE+1]
-    print('pubkey_bytes', pubkey_bytes)
     packer_unpacker = request.app['packers'].get(pubkey_bytes)
     if packer_unpacker:
         packer, unpacker = packer_unpacker
@@ -129,7 +130,6 @@ def create_app(loop):
 if __name__ == "__main__":
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
     redis_server_process = handlebars.start_redis_server(redis_socket_path=data_dir+'sproutwave.sock')
-    diag()
     handlebars.start_redis_server(redis_socket_path=data_dir+'proxysproutwave.sock')
     loop = asyncio.get_event_loop()
     app = create_app(loop)
