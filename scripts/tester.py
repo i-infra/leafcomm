@@ -13,4 +13,4 @@ for fname in sys.argv[1::]:
     start = time.time()
     decoded = node_core.pulses_to_samples(node_core.block_to_pulses(info))
     end = time.time()
-    print(end-start, decoded)
+    print(end - start, decoded)

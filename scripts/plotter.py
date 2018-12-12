@@ -14,15 +14,17 @@ import pycha.scatter
 
 sensor_colors = ['#70B336', '#7CEAFF', '#CFA8FF', '#FFABCB', '#661479']
 opacity = '80'
-sensor_colors = [x+opacity for x in sensor_colors]
+sensor_colors = [x + opacity for x in sensor_colors]
 datastore = tsd.TimeSeriesDatastore()
-def get_datasets(start=0, stop=-1, parameter = 'degc'):
+
+
+def get_datasets(start=0, stop=-1, parameter='degc'):
     sensors = {}
     samples = datastore.get_measurements(start, stop)
     for sample in samples:
-        sample['sensor_uid'] = 'sensor'+str(sample['sensor_uid'])
+        sample['sensor_uid'] = 'sensor' + str(sample['sensor_uid'])
         if sample['units'] == parameter:
-            value = (sample['timestamp']-start, sample['value']*9/5+32)
+            value = (sample['timestamp'] - start, sample['value'] * 9 / 5 + 32)
             if sample['sensor_uid'] not in sensors.keys():
                 sensors[sample['sensor_uid']] = [value]
             else:
@@ -31,7 +33,6 @@ def get_datasets(start=0, stop=-1, parameter = 'degc'):
         if len(sensor[1]) < 10:
             sensors.pop(sensor[0])
     return sensors
-
 
 
 def plotter(filename, datasets, width, height):
@@ -65,14 +66,17 @@ def plotter(filename, datasets, width, height):
     options = {
         'axis': {
             'x': {
-                'ticks': [dict(v=((tick_count-i)*longest/tick_count), label= str(fractions.Fraction(i*offset))+time_label) for i in range(int(tick_count_int)) if i > 0]
+                'ticks': [
+                    dict(v=((tick_count - i) * longest / tick_count), label=str(fractions.Fraction(i * offset)) + time_label)
+                    for i in range(int(tick_count_int)) if i > 0
+                ]
             },
             'y': {
                 'tickCount': 4,
                 'range': (0, 100),
                 'label': 'Deg F',
             },
-            'tickFontSize' : 14,
+            'tickFontSize': 14,
             'legendFontSize': 14,
             'labelFontSize': 28
         },
@@ -86,22 +90,26 @@ def plotter(filename, datasets, width, height):
                 'colors': sensor_colors
             },
         },
-        'legend': {
-        },
-        'stroke': {'shadow': False, 'color': '#aaaaaaff', 'width':6}
+        'legend': {},
+        'stroke': {
+            'shadow': False,
+            'color': '#aaaaaaff',
+            'width': 6
+        }
     }
     chart = pycha.scatter.ScatterplotChart(surface, options)
     chart.addDataset(datasets)
     chart.render()
     return surface
 
-def plot_temperatures(hours=1, width = 1024, height = 768):
-    datasets = get_datasets(time.time()-hours*60*60)
-    filename = "images/timespan-"+str(hours)+"hrs.svg"
+
+def plot_temperatures(hours=1, width=1024, height=768):
+    datasets = get_datasets(time.time() - hours * 60 * 60)
+    filename = "images/timespan-" + str(hours) + "hrs.svg"
     surface = plotter(filename, datasets.items(), width, height)
 
 
-hour_scales = [1, 2, 4, 12, 24, 7*24]
+hour_scales = [1, 2, 4, 12, 24, 7 * 24]
 
 if __name__ in ['__main__', '__console__']:
     while True:

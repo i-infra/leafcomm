@@ -5,13 +5,14 @@ import tempfile
 import uuid
 from enum import Enum
 
+alert_default = ""
 
-alert_default=""
 
 class Status(Enum):
-    WRONG_PASSWORD=0
-    NO_SUCH_USER=1
-    SUCCESS=2
+    WRONG_PASSWORD = 0
+    NO_SUCH_USER = 1
+    SUCCESS = 2
+
 
 @dataclass
 class User:
@@ -26,11 +27,10 @@ class User:
 
 
 class UserDatabase(object):
-
-    def __init__(self, db_name = 'user_config.db'):
+    def __init__(self, db_name='user_config.db'):
         if db_name[0] != '/':
-            temp_log_dir = tempfile.mkdtemp(prefix = 'user-', dir='/tmp')
-            db_name = temp_log_dir+'/'+db_name
+            temp_log_dir = tempfile.mkdtemp(prefix='user-', dir='/tmp')
+            db_name = temp_log_dir + '/' + db_name
         self.db_name = db_name
         self.conn = sql.connect(db_name)
         init_users = 'CREATE TABLE IF NOT EXISTS users (Name TEXT, Email TEXT, Phone TEXT, PasswordHash BLOB, PasswordMeta BLOB, NodeID TEXT, Alerts BLOB, AppSettings BLOB)'
@@ -42,10 +42,10 @@ class UserDatabase(object):
 
     def check_user(self, email, password_hash):
         selector = 'SELECT * FROM users WHERE email=?'
-        users = self.cursor.execute(selector, (email,)).fetchall()
+        users = self.cursor.execute(selector, (email, )).fetchall()
         if users:
             name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[0]
-            if any([x != y for (x,y) in zip(password_hash_stored, password_hash)]):
+            if any([x != y for (x, y) in zip(password_hash_stored, password_hash)]):
                 return Status.WRONG_PASSWORD, None
             else:
                 return Status.SUCCESS, User(*users[0])
@@ -53,8 +53,8 @@ class UserDatabase(object):
 
     def get_user_settings(self, email, password_hash):
         selector = 'SELECT * FROM users WHERE email=?'
-        user = User(*self.cursor.execute(selector, (email,)).fetchone())
-        if all([x == y for (x,y) in zip(user.password_hash, password_hash)]):
+        user = User(*self.cursor.execute(selector, (email, )).fetchone())
+        if all([x == y for (x, y) in zip(user.password_hash, password_hash)]):
             return user
 
     def update_user(self, *args, **kwargs):
@@ -73,7 +73,7 @@ class UserDatabase(object):
         raise NotImplemented
         # localization, units, etc
 
-    def add_user(self, name, email, phone, password_hash, password_meta, node_id, alert_defaults = '', app_settings = ''):
+    def add_user(self, name, email, phone, password_hash, password_meta, node_id, alert_defaults='', app_settings=''):
         inserter = "INSERT INTO users VALUES(?, ?, ?, ?, ?, ?, '', '')"
         data = (name, email, phone, password_hash, password_meta, node_id)
         self.cursor.executemany(inserter, [data])

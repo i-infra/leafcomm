@@ -8,20 +8,22 @@ si_units = ['m', 'kg', 's', 'A', 'K', 'mol', 'cd']
 si_human = ['meter', 'kilogram', 'second', 'ampere', 'Degree Kelvin', 'moles', 'candela']
 # compound units
 unit_list = ['none', 'degc', 'rh', 'pa', 'watt', 'ppm', 'ph', 'ms_per_cm', 'umol_per_m2_s']
-unit_human = ['None', 'Degrees Celsius', 'Relative Humidity', 'Pascals', 'Watts', 'Parts Per Million', 'pH', 'Conductivity', 'Photosynthetically Active Radiation (PAR)']
+unit_human = [
+    'None', 'Degrees Celsius', 'Relative Humidity', 'Pascals', 'Watts', 'Parts Per Million', 'pH', 'Conductivity', 'Photosynthetically Active Radiation (PAR)'
+]
 meta_tags = ['human:', 'per:', 'times:', 'ChEBI:']
 
 # kludge to pull enum into local namespace
 for i, unit in enumerate(unit_list):
-    exec(unit+'='+str(i))
+    exec(unit + '=' + str(i))
 del i, unit
 
-class TimeSeriesDatastore(object):
 
-    def __init__(self, db_name = 'time_series_datastore_v1.db'):
+class TimeSeriesDatastore(object):
+    def __init__(self, db_name='time_series_datastore_v1.db'):
         if db_name[0] != '/':
-            temp_log_dir = tempfile.mkdtemp(prefix = 'tsd-', dir='/tmp')
-            db_name = temp_log_dir+'/'+db_name
+            temp_log_dir = tempfile.mkdtemp(prefix='tsd-', dir='/tmp')
+            db_name = temp_log_dir + '/' + db_name
         self.db_name = db_name
         self.conn = sql.connect(db_name)
         init_readings = 'CREATE TABLE IF NOT EXISTS readings (Timestamp REAL, Sensor INT, Units INT, Value REAL, Meta TEXT)'
@@ -31,30 +33,28 @@ class TimeSeriesDatastore(object):
         self.conn.commit()
         self.cursor = self.conn.cursor()
 
-    def get_measurement_vectors(self, start = 0, stop = -1):
+    def get_measurement_vectors(self, start=0, stop=-1):
         if stop == -1:
             stop = time.time()
-        selector = 'SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s' % (
-            str(start), str(stop))
+        selector = 'SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s' % (str(start), str(stop))
         samples = self.cursor.execute(selector)
         labels = 'timestamp sensor_uid units value meta'.split()
         values = dict(zip(labels, zip(*samples)))
         values['units'] = [unit_list[unit] for unit in values['units']]
         return values
 
-    def get_measurements(self, start = 0, stop = -1):
+    def get_measurements(self, start=0, stop=-1):
         if stop == -1:
             stop = time.time()
-        selector = 'SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s' % (
-            str(start), str(stop))
+        selector = 'SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s' % (str(start), str(stop))
         samples = self.cursor.execute(selector)
         labels = 'timestamp sensor_uid units value meta'.split()
         samples = [dict(zip(labels, sample)) for sample in samples]
         for sample in samples:
-           sample['units'] = unit_list[sample['units']]
+            sample['units'] = unit_list[sample['units']]
         return samples
 
-    def add_measurement(self, timestamp, sensor_uid, units, value, raw = False, meta = None):
+    def add_measurement(self, timestamp, sensor_uid, units, value, raw=False, meta=None):
         if raw == True:
             unit_tag = units
         else:

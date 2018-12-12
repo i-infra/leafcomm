@@ -2,7 +2,7 @@
 
 set -exu
 
-default_lint=`find . -type f -name 'node*.py'`
+default_lint=`find . -type f -name '*.py'`
 LINT=${1-$default_lint}
 if [ -z ${CI+x} ]
         then yapf -i ${LINT}
