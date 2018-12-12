@@ -93,7 +93,7 @@ def init_redis(preface=''):
 
 
 def get_new_center():
-    return 433_800_000 + handlebars.r1dx() * 100_000
+    return 433_800_000 + handlebars.r1dx(10) * 20_000
 
 
 async def analog_to_block() -> typing.Awaitable[None]:
@@ -243,19 +243,48 @@ def demodulator(pulses: numpy.ndarray) -> typing.Iterable[Packet]:
             result = Packet(bits, errors, deciles, pulses[x:y])
             yield result
 
+from dataclasses import dataclass
+
+@dataclass
+class SilverSensor_40b:
+    # s3318p
+    framing: int
+    uid: int
+    unk: int
+    channel: int
+    temp0: int
+    temp1: int
+    temp2: int
+    rh0: int
+    rh1: int
+    button_pushed: bool
+    low_battery: bool
+    checksum: int
+
+@dataclass
+class SilverSensor_36b:
+    # prologue
+    model: int
+    uid: int
+    channel: int
+    button_pushed: bool
+    low_battery: bool
+    temp: int
+    rh: int
 
 def silver_sensor(packet: Packet) -> typing.Dict:
     """ hardware specific demodulation function for the two types of silver sensors """
     if packet.errors == []:
         bits = [x[0] == 2 for x in handlebars.rle(packet.packet) if x[1] == 0]
         if len(bits) == 42:
-            field_bitwidths = [0, 2, 8, 2, 2, 4, 4, 4, 4, 4, 8]
+            field_bitwidths = [0, 2, 8, 2, 2, 4, 4, 4, 4, 4, 1, 1, 6]
             field_positions = [x for x in itertools.accumulate(field_bitwidths)]
             results = [handlebars.debinary(bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
             if results[1] == 255:
                 return {}
-            temp = 16**2 * results[6] + 16 * results[5] + results[4]
-            humidity = 16 * results[8] + results[7]
+            n = SilverSensor_40b(*results)
+            temp = 16**2 * n.temp2 + 16 * n.temp1 + n.temp0
+            humidity = 16 * n.rh1 + n.rh0
             if temp > 1000:
                 temp %= 1000
                 temp += 100
@@ -263,23 +292,19 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             temp -= 32
             temp *= 5 / 9
             open(f'{len(bits)}_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in bits]) + '\n')
-            return {'uid': results[1], 'temperature': temp, 'humidity': humidity, 'channel': results[3]}
+            return {'uid': n.uid, 'temperature': temp, 'humidity': humidity, 'channel': n.channel, 'low_battery': n.low_battery, 'button_pushed': n.button_pushed}
         elif len(bits) == 36:
-            field_bitwidths = [0] + [4] * 9
+            field_bitwidths = [0, 4, 8, 2, 1, 1, 12, 8]
             field_positions = [x for x in itertools.accumulate(field_bitwidths)]
-            n = [handlebars.debinary(bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
-            model = n[0]
-            uid = n[1] << 4 | n[2]
-            temp = n[4] << 8 | n[5] << 4 | n[6]
-            rh = n[7] * 16 + n[8]
+            results = [handlebars.debinary(bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
+            n = SilverSensor_36b(*results)
+            temp = n.temp
             if temp >= 3840:
                 temp -= 4096
             temp /= 10
-            channel = n[3] & 3
-            battery_ok = 8 & n[2] == 0
-            if n[0] == 5:
+            if n.model == 5:
                 open(f'{len(bits)}_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in bits]) + '\n')
-                return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
+                return {'uid': n.uid, 'temperature': temp, 'humidity': n.rh, 'channel': n.channel, 'low_battery': n.low_battery, 'button_pushed': n.button_pushed}
     return {}
 
 
