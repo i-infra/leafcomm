@@ -16,3 +16,6 @@ aiohttp = "*"
 aioredis = "*"
 
 [dev-packages]
+
+[scripts]
+lint = "bash scripts/lint"

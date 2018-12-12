@@ -26,22 +26,26 @@ Info = typing.Dict
 Deciles = typing.Dict[int, typing.Tuple[int, int]]
 Packet = typing.NamedTuple('Packet', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
 
-logger = handlebars.get_logger(__name__, debug = '--debug' in sys.argv)
-
-def complex_to_stereo(a): return numpy.dstack((a.real, a.imag))[0]
+logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
 
-def stereo_to_complex(a): return a[0] + a[1] * 1j
+def complex_to_stereo(a):
+    return numpy.dstack((a.real, a.imag))[0]
 
 
-def printer(xs): return ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
+def stereo_to_complex(a):
+    return a[0] + a[1] * 1j
 
 
-def brickwall(xs): return bottleneck.move_mean(xs, 32, 1)
+def printer(xs):
+    return ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
+
+
+def brickwall(xs):
+    return bottleneck.move_mean(xs, 32, 1)
 
 
 local_dir = os.path.dirname(os.path.realpath(__file__))
-
 
 try:
     import scipy
@@ -57,14 +61,17 @@ try:
         y = lfilter(b, a, data)
         return y
 
-    def lowpass(xs): return butter_filter(xs, 2000.0, 256000.0, 'low', order=4)
+    def lowpass(xs):
+        return butter_filter(xs, 2000.0, 256000.0, 'low', order=4)
+
     filters = [brickwall, lowpass]
 except:
     filters = [brickwall]
 
 
-def compress(in_): return (in_.size, in_.dtype, blosc.compress_ptr(in_.__array_interface__[
-    'data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
+def compress(in_):
+    return (in_.size, in_.dtype,
+            blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
 
 
 def decompress(size: int, dtype: str, data: bytes) -> numpy.ndarray:
@@ -82,10 +89,12 @@ def packed_bytes_to_iq(samples: bytes) -> numpy.ndarray:
 
 
 def init_redis(preface=''):
-    return handlebars.init_redis(data_dir+preface+'sproutwave.sock')
+    return handlebars.init_redis(data_dir + preface + 'sproutwave.sock')
+
 
 def get_new_center():
-    return 433_800_000 + handlebars.r1dx()*100_000
+    return 433_800_000 + handlebars.r1dx() * 100_000
+
 
 async def analog_to_block() -> typing.Awaitable[None]:
     import gc
@@ -99,7 +108,8 @@ async def analog_to_block() -> typing.Awaitable[None]:
     center_frequency = 433900000.0
     # primary sampling state machine
     # samples background amplitude, accumulate and transfer sample chunks significantly above ambient power
-    async for byte_samples in sdr.stream(block_size, format='bytes'):
+    async for byte_samples in sdr.stream(
+        block_size, format='bytes'):
         await tick(connection)
         complex_samples = packed_bytes_to_iq(byte_samples)
         # calculate cum and avg power
@@ -133,7 +143,15 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     size, dtype, compressed = compress(sampled_message)
                     info = {'size': size, 'dtype': dtype.name, 'data': compressed}
                     await pseudopub(connection, 'eof_timestamps', timestamp, info)
-                    logger.debug('flushing: %s' % {'duration': time.time() - timestamp, 'center_freq': center_frequency, 'block_count': len(blocks_accumulated), 'message power': numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated), 'avg': historical_background_power, 'lifetime_blocks': sampled_background_block_count})
+                    logger.debug(
+                        'flushing: %s' % {
+                            'duration': time.time() - timestamp,
+                            'center_freq': center_frequency,
+                            'block_count': len(blocks_accumulated),
+                            'message power': numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated),
+                            'avg': historical_background_power,
+                            'lifetime_blocks': sampled_background_block_count
+                        })
                     await connection.hincrby('good_block', center_frequency, 1)
                 else:
                     await connection.hincrby('short_block', center_frequency, 1)
@@ -144,7 +162,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
     return None
 
 
-def block_to_pulses(compressed_block: Info, smoother: FilterFunc=brickwall) -> numpy.ndarray:
+def block_to_pulses(compressed_block: Info, smoother: FilterFunc = brickwall) -> numpy.ndarray:
     """ takes a compressed block of analog samples, takes magnitude, amplitude-thresholds and returns pulses """
     beep_samples = decompress(**compressed_block)
     shape = beep_samples.shape
@@ -236,7 +254,7 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             results = [handlebars.debinary(bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
             if results[1] == 255:
                 return {}
-            temp = 16 ** 2 * results[6] + 16 * results[5] + results[4]
+            temp = 16**2 * results[6] + 16 * results[5] + results[4]
             humidity = 16 * results[8] + results[7]
             if temp > 1000:
                 temp %= 1000
@@ -244,7 +262,7 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             temp /= 10
             temp -= 32
             temp *= 5 / 9
-            open(f'{len(bits)}_bits', 'a').write(''.join([{True:'1',False:'0'}[bit] for bit in bits])+'\n')
+            open(f'{len(bits)}_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in bits]) + '\n')
             return {'uid': results[1], 'temperature': temp, 'humidity': humidity, 'channel': results[3]}
         elif len(bits) == 36:
             field_bitwidths = [0] + [4] * 9
@@ -260,7 +278,7 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             channel = n[3] & 3
             battery_ok = 8 & n[2] == 0
             if n[0] == 5:
-                open(f'{len(bits)}_bits', 'a').write(''.join([{True:'1',False:'0'}[bit] for bit in bits])+'\n')
+                open(f'{len(bits)}_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in bits]) + '\n')
                 return {'uid': uid, 'temperature': temp, 'humidity': rh, 'channel': channel}
     return {}
 
@@ -318,6 +336,7 @@ def get_hardware_uid() -> (str, bytes):
     human_name = '%s %s' % (colour, veggy)
     return (human_name, hashed)
 
+
 async def register_session_box():
     """ register node with backend. """
     import aiohttp
@@ -334,6 +353,7 @@ async def register_session_box():
                 return (uid, packer)
             else:
                 raise Exception('sproutwave session key setup failed')
+
 
 async def packet_to_upstream(loop=None):
     connection = await init_redis()
@@ -363,6 +383,7 @@ async def packet_to_upstream(loop=None):
                 sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
                 last_sent = time.time()
 
+
 async def packet_to_datastore() -> typing.Awaitable[None]:
     connection = await init_redis()
     datastore = tsd.TimeSeriesDatastore(db_name=data_dir + 'sproutwave_v1.db')
@@ -371,6 +392,7 @@ async def packet_to_datastore() -> typing.Awaitable[None]:
         if measurement is not None:
             datastore.add_measurement(*measurement, raw=True)
     return None
+
 
 async def band_monitor(connection=None):
     if connection == None:
@@ -387,6 +409,7 @@ async def band_monitor(connection=None):
         logger.info('\n'.join(msg))
         await asyncio.sleep(60)
 
+
 async def sensor_monitor(connection=None):
     if connection == None:
         connection = await init_redis()
@@ -397,9 +420,10 @@ async def sensor_monitor(connection=None):
         now = time.time()
         msg = ['UUID\tCOUNT\tLAST SEEN']
         for uid, count in sorted(sensor_uuid_counts.items()):
-            msg += ['%s\t%s\t%d' % (uid.decode(), count.decode(), now-float(sensor_last_seen[uid]))]
+            msg += ['%s\t%s\t%d' % (uid.decode(), count.decode(), now - float(sensor_last_seen[uid]))]
         logger.info('\n'.join(msg))
         await asyncio.sleep(60)
+
 
 async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_pipe=None):
     timeout = 600
@@ -423,9 +447,10 @@ def diag():
     logger.info(str(_diag))
     return _diag
 
+
 def main():
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
-    redis_server_process = handlebars.start_redis_server(redis_socket_path=data_dir+'sproutwave.sock')
+    redis_server_process = handlebars.start_redis_server(redis_socket_path=data_dir + 'sproutwave.sock')
     funcs = analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor, sensor_monitor
     proc_mapping = {}
     while True:
@@ -437,6 +462,7 @@ def main():
             proc_mapping[name] = handlebars.multi_spawner(func)
         time.sleep(30)
         handlebars.multi_spawner(watchdog).join()
+
 
 if __name__ == "__main__":
     main()
