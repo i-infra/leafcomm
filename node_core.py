@@ -13,6 +13,8 @@ import numpy
 import bottleneck
 import ts_datastore as tsd
 
+from dataclasses import dataclass
+
 from node_comms import *
 
 import handlebars
@@ -243,7 +245,6 @@ def demodulator(pulses: numpy.ndarray) -> typing.Iterable[Packet]:
             result = Packet(bits, errors, deciles, pulses[x:y])
             yield result
 
-from dataclasses import dataclass
 
 @dataclass
 class SilverSensor_40b:
@@ -261,6 +262,7 @@ class SilverSensor_40b:
     low_battery: bool
     checksum: int
 
+
 @dataclass
 class SilverSensor_36b:
     # prologue
@@ -271,6 +273,7 @@ class SilverSensor_36b:
     low_battery: bool
     temp: int
     rh: int
+
 
 def silver_sensor(packet: Packet) -> typing.Dict:
     """ hardware specific demodulation function for the two types of silver sensors """
@@ -292,7 +295,14 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             temp -= 32
             temp *= 5 / 9
             open(f'{len(bits)}_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in bits]) + '\n')
-            return {'uid': n.uid, 'temperature': temp, 'humidity': humidity, 'channel': n.channel, 'low_battery': n.low_battery, 'button_pushed': n.button_pushed}
+            return {
+                'uid': n.uid,
+                'temperature': temp,
+                'humidity': humidity,
+                'channel': n.channel,
+                'low_battery': n.low_battery,
+                'button_pushed': n.button_pushed
+            }
         elif len(bits) == 36:
             field_bitwidths = [0, 4, 8, 2, 1, 1, 12, 8]
             field_positions = [x for x in itertools.accumulate(field_bitwidths)]
@@ -304,7 +314,14 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             temp /= 10
             if n.model == 5:
                 open(f'{len(bits)}_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in bits]) + '\n')
-                return {'uid': n.uid, 'temperature': temp, 'humidity': n.rh, 'channel': n.channel, 'low_battery': n.low_battery, 'button_pushed': n.button_pushed}
+                return {
+                    'uid': n.uid,
+                    'temperature': temp,
+                    'humidity': n.rh,
+                    'channel': n.channel,
+                    'low_battery': n.low_battery,
+                    'button_pushed': n.button_pushed
+                }
     return {}
 
 
