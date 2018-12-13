@@ -6,7 +6,10 @@ import cbor
 import time
 
 for fname in sys.argv[1::]:
-    f = open(fname, 'rb').read()
+    if fname == '-':
+        f = sys.stdin.buffer.read()
+    else:
+        f = open(fname, 'rb').read()
     start = time.time()
     info = cbor.loads(f)
     start = time.time()
