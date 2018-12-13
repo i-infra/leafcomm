@@ -48,14 +48,6 @@ class CompressedAnalog:
 logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
 
-def complex_to_stereo(a):
-    return numpy.dstack((a.real, a.imag))[0]
-
-
-def stereo_to_complex(a):
-    return a[0] + a[1] * 1j
-
-
 def printer(xs):
     return ''.join([{L: '░', H: '█', E: '╳'}[x] for x in xs])
 
@@ -377,7 +369,6 @@ async def block_to_sample() -> typing.Awaitable[None]:
         else:
             await connection.expire(timestamp, 3600)
             await connection.sadd('fail_timestamps', timestamp)
-    return None
 
 
 def get_hardware_uid() -> (str, bytes):
