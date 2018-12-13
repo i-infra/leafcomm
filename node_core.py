@@ -342,15 +342,16 @@ def silver_sensor(packet: Packet) -> typing.Dict:
 def pulses_to_sample(pulses: Pulses) -> Sample:
     """ high-level function accepting RLE'd pulses and returning a sample from a silver sensor if present """
     # heuristic - don't process short collections of pulses
-    if len(pulses.sequence) > 10:
-        packet_possibilities = []
-        for packet in demodulator(pulses):
-            logger.debug(f'got: {len(packet.bits)} {printer(packet.bits)}')
-            res = silver_sensor(packet)
-            packet_possibilities += [res]
-            print(packet_possibilities)
-        return packet_possibilities[0]
-    return {}
+    if len(pulses.sequence) < 10:
+        return
+    packet_possibilities = []
+    for packet in demodulator(pulses):
+        logger.debug(f'got: {len(packet.bits)} {printer(packet.bits)}')
+        res = silver_sensor(packet)
+        packet_possibilities += [res]
+    for possibility in packet_possibilities:
+        if packet_possibilities.count(possibility) > 1:
+            return possibility
 
 
 async def block_to_sample() -> typing.Awaitable[None]:
