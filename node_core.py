@@ -7,13 +7,12 @@ import asyncio
 import pathlib
 import itertools
 import statistics
+import dataclasses
 
 import blosc
 import numpy
 import bottleneck
 import ts_datastore as tsd
-
-from dataclasses import dataclass
 
 from node_comms import *
 
@@ -24,9 +23,27 @@ L, H, E = 0, 1, 2
 data_dir = os.path.expanduser('~/.sproutwave/')
 
 FilterFunc = typing.Callable[[numpy.ndarray], numpy.ndarray]
-Info = typing.Dict
 Deciles = typing.Dict[int, typing.Tuple[int, int]]
-Packet = typing.NamedTuple('Packet', [('packet', list), ('errors', list), ('deciles', dict), ('raw', list)])
+
+@dataclasses.dataclass
+class Packet:
+    bits: list
+    errors: list
+    deciles: dict
+    raw: list
+    timestamp: float
+
+@dataclasses.dataclass
+class Pulses:
+    sequence: list
+    timestamp: float
+
+@dataclasses.dataclass
+class CompressedAnalog:
+    size: int
+    dtype: str
+    data: bytes
+    timestamp: float
 
 logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
@@ -46,8 +63,6 @@ def printer(xs):
 def brickwall(xs):
     return bottleneck.move_mean(xs, 32, 1)
 
-
-local_dir = os.path.dirname(os.path.realpath(__file__))
 
 try:
     import scipy
@@ -72,11 +87,11 @@ except:
 
 
 def compress(in_):
-    return (in_.size, in_.dtype,
+    return (in_.size, in_.dtype.str,
             blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
 
 
-def decompress(size: int, dtype: str, data: bytes) -> numpy.ndarray:
+def decompress(size: int, dtype: str, data: bytes, **kwargs) -> numpy.ndarray:
     out = numpy.empty(size, dtype)
     blosc.decompress_ptr(data, out.__array_interface__['data'][0])
     return out
@@ -102,7 +117,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
     import gc
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
-    sdr.rs, sdr.fc, sdr.gain = 256000, 433900000.0, 9
+    sdr.rs, sdr.fc, sdr.gain = 256000, 433900000.0, 15
     connection = await init_redis()
     block_size = 512 * 64
     samp_size = block_size // 2
@@ -142,21 +157,21 @@ async def analog_to_block() -> typing.Awaitable[None]:
                 if len(blocks_accumulated) > 9:
                     blocks_accumulated.append(complex_samples)
                     sampled_message = numpy.concatenate(blocks_accumulated)
-                    size, dtype, compressed = compress(sampled_message)
-                    info = {'size': size, 'dtype': dtype.name, 'data': compressed}
-                    await pseudopub(connection, 'eof_timestamps', timestamp, info)
+                    info = CompressedAnalog(*compress(sampled_message), timestamp)
+                    await pseudopub(connection, 'eof_timestamps', timestamp, dataclasses.asdict(info))
                     logger.debug(
                         'flushing: %s' % {
-                            'duration': time.time() - timestamp,
+                            'timestamp': timestamp,
+                            'duration_ms': int((time.time() - timestamp)*1000),
                             'center_freq': center_frequency,
                             'block_count': len(blocks_accumulated),
-                            'message power': numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated),
-                            'avg': historical_background_power,
+                            'message power': int(numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated)),
+                            'avg': int(historical_background_power),
                             'lifetime_blocks': sampled_background_block_count
                         })
-                    await connection.hincrby('good_block', center_frequency, 1)
+                    await connection.hincrby('success_block', center_frequency, 1)
                 else:
-                    await connection.hincrby('short_block', center_frequency, 1)
+                    await connection.hincrby('fail_block', center_frequency, 1)
                 blocks_accumulated, accumulating_blocks = [], False
                 gc.collect()
     await sdr.stop()
@@ -164,46 +179,44 @@ async def analog_to_block() -> typing.Awaitable[None]:
     return None
 
 
-def block_to_pulses(compressed_block: Info, smoother: FilterFunc = brickwall) -> numpy.ndarray:
+def block_to_pulses(compressed_block: CompressedAnalog, smoother: FilterFunc = brickwall) -> Pulses:
     """ takes a compressed block of analog samples, takes magnitude, amplitude-thresholds and returns pulses """
     beep_samples = decompress(**compressed_block)
-    shape = beep_samples.shape
-    beep_absolute = numpy.empty(shape, dtype='float32')
     beep_absolute = numpy.abs(beep_samples)
     beep_smoothed = smoother(beep_absolute)
     threshold = 1.1 * bottleneck.nanmean(beep_smoothed)
     beep_binary = beep_smoothed > threshold
-    pulses = handlebars.rle(beep_binary)
-    return numpy.array(pulses)
+    return Pulses(numpy.array(handlebars.rle(beep_binary)), compressed_block.get('timestamp'))
 
 
-def pulses_to_deciles(pulses: numpy.ndarray) -> Deciles:
+def pulses_to_deciles(pulses: Pulses) -> Deciles:
     """ takes an array of run-length encoded pulses, finds centroids for 'long' and 'short' """
-    values = numpy.unique(pulses.T[1])
+    values = numpy.unique(pulses.sequence.T[1])
     deciles = {}
-    if len(pulses) < 10:
+    if len(pulses.sequence) < 10:
         return {}
     for value in values:
-        counts = numpy.sort(pulses[numpy.where(pulses.T[1] == value)].T[0])
+        counts = numpy.sort(pulses.sequence[numpy.where(pulses.sequence.T[1] == value)].T[0])
         tenth = len(counts) // 10
         if not tenth:
             return {}
         short_decile = int(numpy.mean(counts[1 * tenth:2 * tenth]))
         long_decile = int(numpy.mean(counts[8 * tenth:9 * tenth]))
         deciles[value] = short_decile, long_decile
+    logger.debug(f'using deciles {deciles}')
     return deciles
 
 
-def pulses_to_breaks(pulses: numpy.ndarray, deciles: Deciles) -> typing.List[int]:
+def pulses_to_breaks(pulses: Pulses, deciles: Deciles) -> typing.List[int]:
     """ with pulse array and definition of 'long' and 'short' pulses, find position of repeated packets """
     # heuristic - cutoff duration for a break between subsequent packets is at least 9x
     #  the smallest of the 'long' and 'short' pulses
     cutoff = min(deciles[0][0], deciles[1][0]) * 9
-    breaks = numpy.logical_and(pulses.T[0] > cutoff, pulses.T[1] == L).nonzero()[0]
+    breaks = numpy.logical_and(pulses.sequence.T[0] > cutoff, pulses.sequence.T[1] == L).nonzero()[0]
     break_deltas = numpy.diff(breaks)
     # heuristic - "packet" "repeated" with fewer than 5 separations or more than 50 breaks is no good
     if len(breaks) > 50 or len(breaks) < 5:
-        return []
+        breaks = []
     # heuristic - if more than 3 different spacings between detected repeated packets, tighten up purposed breaks
     elif len(numpy.unique(break_deltas[numpy.where(break_deltas > 3)])) > 3:
         try:
@@ -215,10 +228,11 @@ def pulses_to_breaks(pulses: numpy.ndarray, deciles: Deciles) -> typing.List[int
             return []
         tolerance = d_mode // 10
         breaks = [x for x, bd in zip(breaks, break_deltas) if any([abs(x - y) < tolerance for y in expected_breaks]) or bd == d_mode or bd < 5]
+    logger.debug(f'using breaks {breaks}')
     return breaks
 
 
-def demodulator(pulses: numpy.ndarray) -> typing.Iterable[Packet]:
+def demodulator(pulses: Pulses) -> typing.Iterable[Packet]:
     """ high level demodulator function accepting a pulse array and yielding 0 or more Packets """
     deciles = pulses_to_deciles(pulses)
     if deciles == {}:
@@ -227,26 +241,28 @@ def demodulator(pulses: numpy.ndarray) -> typing.Iterable[Packet]:
     if len(breaks) == 0:
         return []
     for x, y in zip(breaks, breaks[1:]):
-        pulse_group = pulses[x + 1:y]
-        bits = []
+        pulse_group = pulses.sequence[x + 1:y]
+        symbols = []
         errors = []
         for chip in pulse_group:
             valid = False
             for v in deciles.keys():
                 for i, width in enumerate(deciles[v]):
                     if not valid and chip[1] == v and abs(chip[0] - width) < width // 2:
-                        bits += [v] * (i + 1)
+                        symbols += [v] * (i + 1)
                         valid = True
             if not valid:
                 errors += [chip]
-                bits.append(E)
-        # heuristic - don't have packets with fewer than 4 bits
-        if len(bits) > 4:
-            result = Packet(bits, errors, deciles, pulses[x:y])
-            yield result
+                symbols.append(E)
+        # heuristic - don't have packets with fewer than 10 symbols
+        if E not in symbols and len(symbols) > 10:
+            # NB. this is somewhat unique to the silver sensors in question
+            # duration of low pulses determines bit value 100 -> 1; 10 -> 0
+            bits = [x[0] == 2 for x in handlebars.rle(symbols) if x[1] == 0]
+            yield Packet(bits, errors, deciles, pulses.sequence[x:y], pulses.timestamp)
 
 
-@dataclass
+@dataclasses.dataclass
 class SilverSensor_40b:
     # s3318p
     framing: int
@@ -263,26 +279,36 @@ class SilverSensor_40b:
     checksum: int
 
 
-@dataclass
+@dataclasses.dataclass
 class SilverSensor_36b:
     # prologue
     model: int
     uid: int
     channel: int
-    button_pushed: bool
     low_battery: bool
+    button_pushed: bool
     temp: int
     rh: int
 
 
+@dataclasses.dataclass
+class Sample:
+    uid: int
+    temperature: float
+    humidity: float
+    channel: int
+    low_battery: bool
+    button_pushed: bool
+
+
 def silver_sensor(packet: Packet) -> typing.Dict:
     """ hardware specific demodulation function for the two types of silver sensors """
+    success = False
     if packet.errors == []:
-        bits = [x[0] == 2 for x in handlebars.rle(packet.packet) if x[1] == 0]
-        if len(bits) == 42:
+        if len(packet.bits) == 42:
             field_bitwidths = [0, 2, 8, 2, 2, 4, 4, 4, 4, 4, 1, 1, 6]
             field_positions = [x for x in itertools.accumulate(field_bitwidths)]
-            results = [handlebars.debinary(bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
+            results = [handlebars.debinary(packet.bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
             if results[1] == 255:
                 return {}
             n = SilverSensor_40b(*results)
@@ -294,75 +320,62 @@ def silver_sensor(packet: Packet) -> typing.Dict:
             temp /= 10
             temp -= 32
             temp *= 5 / 9
-            open(f'{len(bits)}_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in bits]) + '\n')
-            return {
-                'uid': n.uid,
-                'temperature': temp,
-                'humidity': humidity,
-                'channel': n.channel,
-                'low_battery': n.low_battery,
-                'button_pushed': n.button_pushed
-            }
-        elif len(bits) == 36:
+            success = True
+        elif len(packet.bits) == 36:
             field_bitwidths = [0, 4, 8, 2, 1, 1, 12, 8]
             field_positions = [x for x in itertools.accumulate(field_bitwidths)]
-            results = [handlebars.debinary(bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
+            results = [handlebars.debinary(packet.bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
             n = SilverSensor_36b(*results)
             temp = n.temp
             if temp >= 3840:
                 temp -= 4096
             temp /= 10
+            humidity = n.rh
             if n.model == 5:
-                open(f'{len(bits)}_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in bits]) + '\n')
-                return {
-                    'uid': n.uid,
-                    'temperature': temp,
-                    'humidity': n.rh,
-                    'channel': n.channel,
-                    'low_battery': n.low_battery,
-                    'button_pushed': n.button_pushed
-                }
-    return {}
+                success = True
+    if success:
+        if len(packet.bits) == 42:
+            open('42_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in packet.bits]) + '\n')
+        return Sample(n.uid+1024+n.channel, temp, humidity, n.channel, n.low_battery, n.button_pushed)
 
 
-def pulses_to_samples(pulses: numpy.ndarray) -> typing.Dict:
+def pulses_to_sample(pulses: Pulses) -> Sample:
     """ high-level function accepting RLE'd pulses and returning a sample from a silver sensor if present """
     # heuristic - don't process short collections of pulses
-    if len(pulses) > 10:
+    if len(pulses.sequence) > 10:
+        packet_possibilities = []
         for packet in demodulator(pulses):
+            logger.debug(f'got: {len(packet.bits)} {printer(packet.bits)}')
             res = silver_sensor(packet)
-            if 'uid' in res.keys():
-                logger.debug(printer(packet.packet))
-                res['uid'] = res['channel'] + 1 * 1024 + res['uid']
-                return res
+            packet_possibilities += [res]
+            print(packet_possibilities)
+        return packet_possibilities[0]
     return {}
 
 
-async def block_to_packet() -> typing.Awaitable[None]:
+async def block_to_sample() -> typing.Awaitable[None]:
     """ worker function which waits for blocks of samples in redis queue, attempts to demodulate / decode to T&H.
     does housekeeping"""
     connection = await init_redis()
-    async for timestamp, info in pseudosub(connection, 'eof_timestamps'):
-        if info is not None:
+    async for timestamp, compressed_raw_samples in pseudosub(connection, 'eof_timestamps'):
+        decoded = None
+        if compressed_raw_samples:
             for filter_func in filters:
-                pulses = block_to_pulses(info, filter_func)
-                decoded = pulses_to_samples(pulses)
-                if decoded != {}:
+                pulses = block_to_pulses(compressed_raw_samples, filter_func)
+                decoded = pulses_to_sample(pulses)
+                if decoded:
                     break
+        logger.info(f'decoded {timestamp} {decoded} with {filter_func}')
+        if decoded:
+            await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.degc, float(decoded.temperature)])
+            await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.rh, float(decoded.humidity)])
+            await connection.sadd('success_timestamps', timestamp)
+            await connection.hincrby('sensor_uuid_counts', decoded.uid, 1)
+            await connection.hset('sensor_uuid_timestamps', decoded.uid, timestamp)
+            await connection.expire(timestamp, 120)
         else:
-            decoded = {}
-        if decoded == {}:
-            logger.debug('packetizer decoded %s %s' % (timestamp, decoded))
             await connection.expire(timestamp, 3600)
             await connection.sadd('fail_timestamps', timestamp)
-        else:
-            logger.info('packetizer decoded %s %s' % (timestamp, decoded))
-            await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.degc, float(decoded['temperature'])])
-            await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded['uid'], tsd.rh, float(decoded['humidity'])])
-            await connection.sadd('success_timestamps', timestamp)
-            await connection.hincrby('sensor_uuid_counts', decoded['uid'], 1)
-            await connection.hset('sensor_uuid_timestamps', decoded['uid'], timestamp)
-            await connection.expire(timestamp, 120)
     return None
 
 
@@ -397,7 +410,8 @@ async def register_session_box():
                 raise Exception('sproutwave session key setup failed')
 
 
-async def packet_to_upstream(loop=None):
+async def sample_to_upstream(loop=None):
+    """ accumulates frames of latest values and periodically encrypts and sends to upstream via udp """
     connection = await init_redis()
     await tick(connection)
     import socket
@@ -414,7 +428,7 @@ async def packet_to_upstream(loop=None):
             seen_count = int(await connection.hget('sensor_uuid_counts', reading[1]) or '0')
             last_seen = float(await connection.hget('sensor_uuid_timestamps', reading[1]) or '0')
             if last_seen and seen_count:
-                seen_multiple_times_recently = (seen_count > 1) and ((float(reading[0]) - last_seen) < 600)
+                seen_multiple_times_recently = (seen_count > 2) and ((float(reading[0]) - last_seen) < 600)
         if seen_multiple_times_recently:
             if reading:
                 samples[reading[1] + 4096 * reading[2]] = reading
@@ -426,25 +440,27 @@ async def packet_to_upstream(loop=None):
                 last_sent = time.time()
 
 
-async def packet_to_datastore() -> typing.Awaitable[None]:
+async def sample_to_datastore() -> typing.Awaitable[None]:
+    """ logs samples in the local sqlite database """
     connection = await init_redis()
     datastore = tsd.TimeSeriesDatastore(db_name=data_dir + 'sproutwave_v1.db')
     sys.stderr.write(datastore.db_name + '\n')
-    async for _, measurement in pseudosub(connection, 'datastore_channel'):
-        if measurement is not None:
-            datastore.add_measurement(*measurement, raw=True)
+    async for _, reading in pseudosub(connection, 'datastore_channel'):
+        if reading is not None:
+            datastore.add_measurement(*reading, raw=True)
     return None
 
 
 async def band_monitor(connection=None):
+    """ periodically log a table of how many blocks we've successfully or unsuccessfully decoded for all frequencies """
     if connection == None:
         connection = await init_redis()
     await asyncio.sleep(handlebars.r1dx(20))
     while True:
-        good_stats = await connection.hgetall('good_block')
+        good_stats = await connection.hgetall('success_block')
         msg = ['FREQ\t\tOK\tNO']
         for freq, count in sorted(good_stats.items()):
-            failed = await connection.hget('short_block', freq)
+            failed = await connection.hget('fail_block', freq)
             if failed == None:
                 failed = b'0'
             msg += [f'{freq.decode()}\t{count.decode()}\t{failed.decode()}']
@@ -453,6 +469,7 @@ async def band_monitor(connection=None):
 
 
 async def sensor_monitor(connection=None):
+    """ periodically log a table of last seen and number times seen for all sensors """
     if connection == None:
         connection = await init_redis()
     await asyncio.sleep(handlebars.r1dx(20))
@@ -468,6 +485,7 @@ async def sensor_monitor(connection=None):
 
 
 async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_pipe=None):
+    """ run until it's been more than 600 seconds since all flowgraphs ticked, then exit """
     timeout = 600
     tick_cycle = 120
     if connection == None:
@@ -493,7 +511,7 @@ def diag():
 def main():
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
     redis_server_process = handlebars.start_redis_server(redis_socket_path=data_dir + 'sproutwave.sock')
-    funcs = analog_to_block, block_to_packet, packet_to_datastore, packet_to_upstream, band_monitor, sensor_monitor
+    funcs = analog_to_block, block_to_sample, sample_to_datastore, sample_to_upstream, band_monitor, sensor_monitor
     proc_mapping = {}
     while True:
         for func in funcs:
