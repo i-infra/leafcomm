@@ -13,8 +13,9 @@ import dataclasses
 import user_datastore
 import pathlib
 import os
+import sys
 
-logging.getLogger().setLevel(logging.DEBUG)
+logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
 data_dir = os.path.expanduser('~/.sproutwave/')
 
@@ -43,11 +44,11 @@ async def register_node(request):
     assert posted_bytes[0] == 1
     pubkey_bytes = posted_bytes[1:PUBKEY_SIZE + 1]
     packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
-    uid = await unpacker(posted_bytes)
+    uid_bytes = await unpacker(posted_bytes)
     status = b'\x01'
     encrypted_status = await packer(status)
-    await connection.hset('pubkey_uid_mapping', pubkey_bytes, uid)
-    await connection.hset('first_seen_pubkey', pubkey_bytes, time.time())
+    await connection.hset('node_pubkey_uid_mapping', pubkey_bytes.hex(), uid_bytes.hex())
+    await connection.hset('node_first_seen_pubkey', pubkey_bytes.hex(), time.time())
     return web.Response(body=encrypted_status, status=200)
 
 
@@ -63,11 +64,11 @@ async def redistribute(loop=None):
                 unpackers[pubkey_bytes] = unpacker
             else:
                 unpacker = unpackers[pubkey_bytes]
-            uid = await redis_connection.hget('pubkey_uid_mapping', pubkey_bytes)
+            uid = await redis_connection.hget('node_pubkey_uid_mapping', pubkey_bytes.hex())
             update_msg = await unpacker(udp_bytes)
-            logger.info(f'{uid.hex()} {update_msg}')
+            logger.info(f'{uid.decode()} {update_msg}')
             await redis_connection.hset('most_recent', uid, cbor.dumps(update_msg))
-            await pseudopub(redis_connection, [uid], None, update_msg)
+            await pseudopub(redis_connection, [f'updates_{uid.decode()}'], None, update_msg)
 
 
 async def start_authenticated_session(request):
@@ -94,7 +95,8 @@ async def start_authenticated_session(request):
         user_signin_status, user_info = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
         msg = ('login', str(user_signin_status), dataclasses.asdict(user_info))
     if user_signin_status == user_datastore.Status.SUCCESS:
-        await connection.hset('authed_user_pubkey_uid_mapping', pubkey_bytes, user_info.node_id)
+        await connection.hset('user_pubkey_uid_mapping', pubkey_bytes.hex(), user_info.node_id)
+        await connection.hset('user_timestamp_authed_pubkey', pubkey_bytes.hex(), time.time())
     encrypted_message = await packer(msg)
     return web.Response(body=encrypted_message, content_type='application/octet-stream')
 
@@ -109,9 +111,10 @@ async def get_latest(request):
         packer, unpacker = packer_unpacker
     else:
         packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
-    uid = await connection.hget('authed_user_pubkey_uid_mapping', pubkey_bytes)
+        request.app['packers'][pubkey_bytes] = (packer, unpacker)
+    uid = await connection.hget('user_pubkey_uid_mapping', pubkey_bytes.hex())
     msg = await unpacker(posted_bytes)
-    latest = await connection.hget('most_recent', bytes.fromhex(uid.decode()))
+    latest = await connection.hget('most_recent', uid)
     encrypted_message = await packer(cbor.loads(latest))
     return web.Response(body=encrypted_message, content_type='application/octet-stream')
 
