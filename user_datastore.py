@@ -78,4 +78,4 @@ class UserDatabase(object):
         data = (name, email, phone, password_hash, password_meta, node_id)
         self.cursor.executemany(inserter, [data])
         self.conn.commit()
-        return SUCCESS
+        return Status.SUCCESS
