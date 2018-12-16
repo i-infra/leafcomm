@@ -84,6 +84,7 @@ async def start_authenticated_session(request):
         for key in signup_required_fields:
             assert msg.get(key)
         user_signin_status, user_info = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
+        print(user_signin_status)
         if user_signin_status == user_datastore.Status.NO_SUCH_USER:
             user_signin_status = users_db.add_user(
                 msg.get('name'), msg.get('email'), msg.get('phone'), msg.get('passwordHash'), msg.get('passwordHint'), msg.get('nodeSecret'))
@@ -93,6 +94,7 @@ async def start_authenticated_session(request):
         for key in login_required_fields:
             assert msg.get(key)
         user_signin_status, user_info = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
+        print(user_info)
         msg = ('login', str(user_signin_status), dataclasses.asdict(user_info))
     if user_signin_status == user_datastore.Status.SUCCESS:
         await connection.hset('user_pubkey_uid_mapping', pubkey_bytes.hex(), user_info.node_id)
@@ -115,7 +117,10 @@ async def get_latest(request):
     uid = await connection.hget('user_pubkey_uid_mapping', pubkey_bytes.hex())
     msg = await unpacker(posted_bytes)
     latest = await connection.hget('most_recent', uid)
-    encrypted_message = await packer(cbor.loads(latest))
+    if latest is not None:
+        encrypted_message = await packer(cbor.loads(latest))
+    else:
+        encrypted_message = await packer('NO DATA YET')
     return web.Response(body=encrypted_message, content_type='application/octet-stream')
 
 
