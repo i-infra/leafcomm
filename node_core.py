@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import json
 import typing
 import pprint
 import asyncio
@@ -20,6 +21,7 @@ import handlebars
 import _constants
 
 L, H, E = 0, 1, 2
+logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 data_dir = os.path.expanduser('~/.sproutwave/')
 
 FilterFunc = typing.Callable[[numpy.ndarray], numpy.ndarray]
@@ -37,15 +39,6 @@ class Packet:
 class Pulses:
     sequence: list
     timestamp: float
-
-@dataclasses.dataclass
-class CompressedAnalog:
-    size: int
-    dtype: str
-    data: bytes
-    timestamp: float
-
-logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
 
 def printer(xs):
@@ -79,8 +72,8 @@ except:
 
 
 def compress(in_):
-    return (in_.size, in_.dtype.str,
-            blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
+    return dict(size=in_.size, dtype=in_.dtype.str,
+            data=blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
 
 
 def decompress(size: int, dtype: str, data: bytes, **kwargs) -> numpy.ndarray:
@@ -149,8 +142,8 @@ async def analog_to_block() -> typing.Awaitable[None]:
                 if len(blocks_accumulated) > 9:
                     blocks_accumulated.append(complex_samples)
                     sampled_message = numpy.concatenate(blocks_accumulated)
-                    info = CompressedAnalog(*compress(sampled_message), timestamp)
-                    await pseudopub(connection, 'eof_timestamps', timestamp, dataclasses.asdict(info))
+                    info = compress(sampled_message)
+                    await pseudopub(connection, 'eof_timestamps', timestamp, info)
                     logger.debug(
                         'flushing: %s' % {
                             'timestamp': timestamp,
@@ -171,7 +164,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
     return None
 
 
-def block_to_pulses(compressed_block: CompressedAnalog, smoother: FilterFunc = brickwall) -> Pulses:
+def block_to_pulses(compressed_block: typing.Dict, smoother: FilterFunc = brickwall) -> Pulses:
     """ takes a compressed block of analog samples, takes magnitude, amplitude-thresholds and returns pulses """
     beep_samples = decompress(**compressed_block)
     beep_absolute = numpy.abs(beep_samples)
@@ -181,17 +174,17 @@ def block_to_pulses(compressed_block: CompressedAnalog, smoother: FilterFunc = b
     return Pulses(numpy.array(handlebars.rle(beep_binary)), compressed_block.get('timestamp'))
 
 
-def pulses_to_deciles(pulses: Pulses) -> Deciles:
+def pulses_to_deciles(pulses: Pulses) -> typing.Optional[Deciles]:
     """ takes an array of run-length encoded pulses, finds centroids for 'long' and 'short' """
     values = numpy.unique(pulses.sequence.T[1])
     deciles = {}
     if len(pulses.sequence) < 10:
-        return {}
+        return deciles
     for value in values:
         counts = numpy.sort(pulses.sequence[numpy.where(pulses.sequence.T[1] == value)].T[0])
         tenth = len(counts) // 10
         if not tenth:
-            return {}
+            return deciles
         short_decile = int(numpy.mean(counts[1 * tenth:2 * tenth]))
         long_decile = int(numpy.mean(counts[8 * tenth:9 * tenth]))
         deciles[value] = short_decile, long_decile
@@ -227,11 +220,11 @@ def pulses_to_breaks(pulses: Pulses, deciles: Deciles) -> typing.List[int]:
 def demodulator(pulses: Pulses) -> typing.Iterable[Packet]:
     """ high level demodulator function accepting a pulse array and yielding 0 or more Packets """
     deciles = pulses_to_deciles(pulses)
-    if deciles == {}:
-        return []
+    if not deciles:
+        return
     breaks = pulses_to_breaks(pulses, deciles)
     if len(breaks) == 0:
-        return []
+        return
     for x, y in zip(breaks, breaks[1:]):
         pulse_group = pulses.sequence[x + 1:y]
         symbols = []
@@ -293,38 +286,40 @@ class Sample:
     button_pushed: bool
 
 
-def silver_sensor(packet: Packet) -> typing.Dict:
-    """ hardware specific demodulation function for the two types of silver sensors """
+def depacketize(packet: Packet, bitwidths: typing.List[int], output_class: dataclasses.dataclass):
+    """ accept a Packet, list of field bitwidths, and output datatype. do the segmenting and binary conversion. """
+    if bitwidths[0] != 0:
+        bitwidths = [0] + bitwidths
+    field_positions = [x for x in itertools.accumulate(bitwidths)]
+    results = [handlebars.debinary(packet.bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
+    return output_class(*results)
+
+
+def silver_sensor_decoder(packet: Packet) -> typing.Optional[Sample]:
+    """ hardware specific decoding function for the two types of silver sensors """
     success = False
-    if packet.errors == []:
-        if len(packet.bits) == 42:
-            field_bitwidths = [0, 2, 8, 2, 2, 4, 4, 4, 4, 4, 1, 1, 6]
-            field_positions = [x for x in itertools.accumulate(field_bitwidths)]
-            results = [handlebars.debinary(packet.bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
-            if results[1] == 255:
-                return {}
-            n = SilverSensor_40b(*results)
-            temp = 16**2 * n.temp2 + 16 * n.temp1 + n.temp0
-            humidity = 16 * n.rh1 + n.rh0
-            if temp > 1000:
-                temp %= 1000
-                temp += 100
-            temp /= 10
-            temp -= 32
-            temp *= 5 / 9
+    if packet.errors:
+        return
+    if len(packet.bits) == 42:
+        n = depacketize(packet, [2, 8, 2, 2, 4, 4, 4, 4, 4, 1, 1, 6], SilverSensor_40b)
+        if n.uid == 255:
+            return
+        temp = 16**2 * n.temp2 + 16 * n.temp1 + n.temp0
+        humidity = 16 * n.rh1 + n.rh0
+        if temp > 1000:
+            temp %= 1000
+            temp += 100
+        temp = ((temp / 10) - 32) * 5/9
+        success = True
+    elif len(packet.bits) == 36:
+        n = depacketize(packet, [4, 8, 2, 1, 1, 12, 8], SilverSensor_36b)
+        temp = n.temp
+        if temp >= 3840:
+            temp -= 4096
+        temp /= 10
+        humidity = n.rh
+        if n.model == 5:
             success = True
-        elif len(packet.bits) == 36:
-            field_bitwidths = [0, 4, 8, 2, 1, 1, 12, 8]
-            field_positions = [x for x in itertools.accumulate(field_bitwidths)]
-            results = [handlebars.debinary(packet.bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
-            n = SilverSensor_36b(*results)
-            temp = n.temp
-            if temp >= 3840:
-                temp -= 4096
-            temp /= 10
-            humidity = n.rh
-            if n.model == 5:
-                success = True
     if success:
         if len(packet.bits) == 42:
             open('42_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in packet.bits]) + '\n')
@@ -333,32 +328,33 @@ def silver_sensor(packet: Packet) -> typing.Dict:
 
 def pulses_to_sample(pulses: Pulses) -> Sample:
     """ high-level function accepting RLE'd pulses and returning a sample from a silver sensor if present """
-    # heuristic - don't process short collections of pulses
-    if len(pulses.sequence) < 10:
-        return
     packet_possibilities = []
     for packet in demodulator(pulses):
         logger.debug(f'got: {len(packet.bits)} {printer(packet.bits)}')
-        res = silver_sensor(packet)
-        packet_possibilities += [res]
+        packet_possibilities += [silver_sensor_decoder(packet)]
     for possibility in packet_possibilities:
         if packet_possibilities.count(possibility) > 1:
             return possibility
 
 
 async def block_to_sample() -> typing.Awaitable[None]:
-    """ worker function which waits for blocks of samples in redis queue, attempts to demodulate / decode to T&H.
-    does housekeeping"""
+    """ worker function which:
+     * waits for blocks of analog data in redis queue
+     * attempts to demodulate to pulses
+     * attempts to decode to T&H.
+     * broadcasts result / reports fail
+     * updates expirations of analog data block """
     connection = await init_redis()
     async for timestamp, compressed_raw_samples in pseudosub(connection, 'eof_timestamps'):
         decoded = None
         if compressed_raw_samples:
             for filter_func in filters:
                 pulses = block_to_pulses(compressed_raw_samples, filter_func)
-                decoded = pulses_to_sample(pulses)
-                if decoded:
-                    break
-        logger.info(f'decoded {timestamp} {decoded} with {filter_func}')
+                if len(pulses.sequence) > 10:
+                    decoded = pulses_to_sample(pulses)
+                    if decoded:
+                        break
+        logger.info(f'decoded {timestamp} {decoded} with {filter_func.__name__}')
         if decoded:
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.degc, float(decoded.temperature)])
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.rh, float(decoded.humidity)])
@@ -415,18 +411,13 @@ async def sample_to_upstream(loop=None):
     samples = {}
     last_sent = time.time()
     async for timestamp, reading in pseudosub(connection, 'upstream_channel'):
-        seen_multiple_times_recently = False
         if reading:
             seen_count = int(await connection.hget('sensor_uuid_counts', reading[1]) or '0')
             last_seen = float(await connection.hget('sensor_uuid_timestamps', reading[1]) or '0')
-            if last_seen and seen_count:
-                seen_multiple_times_recently = (seen_count > 2) and ((float(reading[0]) - last_seen) < 600)
-        if seen_multiple_times_recently:
-            if reading:
-                samples[reading[1] + 4096 * reading[2]] = reading
+            samples[reading[1] + 4096 * reading[2]] = reading
             if (time.time() > last_sent + max_update_interval):
                 update_samples = [x for x in samples.values()]
-                logger.info(f'submitting {pprint.pformat(update_samples)}')
+                logger.info(f'submitting {update_samples}')
                 update_message = await packer(update_samples)
                 sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
                 last_sent = time.time()
@@ -449,14 +440,18 @@ async def band_monitor(connection=None):
         connection = await init_redis()
     await asyncio.sleep(handlebars.r1dx(20))
     while True:
+        now = time.time()
         good_stats = await connection.hgetall('success_block')
-        msg = ['FREQ\t\tOK\tNO']
+        fail_stats = await connection.hgetall('fail_block')
+        channel_stats = dict(stats={}, timestamp=int(now))
         for freq, count in sorted(good_stats.items()):
-            failed = await connection.hget('fail_block', freq)
+            failed = fail_stats.get(freq)
             if failed == None:
-                failed = b'0'
-            msg += [f'{freq.decode()}\t{count.decode()}\t{failed.decode()}']
-        logger.info('\n'.join(msg))
+                failed = 0
+            else:
+                failed = int(failed)
+            channel_stats['stats'][int(freq)]=[int(count), failed]
+        logger.info(json.dumps(channel_stats))
         await asyncio.sleep(60)
 
 
@@ -466,17 +461,17 @@ async def sensor_monitor(connection=None):
         connection = await init_redis()
     await asyncio.sleep(handlebars.r1dx(20))
     while True:
+        now = time.time()
         sensor_uuid_counts = await connection.hgetall('sensor_uuid_counts')
         sensor_last_seen = await connection.hgetall('sensor_uuid_timestamps')
-        now = time.time()
-        msg = ['UUID\tCOUNT\tLAST SEEN']
+        sensor_stats = dict(stats={}, timestamp=int(now))
         for uid, count in sorted(sensor_uuid_counts.items()):
-            msg += ['%s\t%s\t%d' % (uid.decode(), count.decode(), now - float(sensor_last_seen[uid]))]
-        logger.info('\n'.join(msg))
+            sensor_stats['stats'][int(uid)] = [int(count), int(now - float(sensor_last_seen[uid]))]
+        logger.info(json.dumps(sensor_stats))
         await asyncio.sleep(60)
 
 
-async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_pipe=None):
+async def watchdog(connection=None, threshold=600, key='sproutwave_ticks'):
     """ run until it's been more than 600 seconds since all flowgraphs ticked, then exit """
     timeout = 600
     tick_cycle = 120
@@ -485,19 +480,13 @@ async def watchdog(connection=None, threshold=600, key='sproutwave_ticks', send_
     while True:
         now = time.time()
         ticks = await get_ticks(connection, key=key)
+        process_stats = dict(stats={}, timestamp=int(now))
         for name, timestamp in ticks.items():
-            logger.info('name: %s, now: %d, last_timestamp: %d' % (name.decode(), now, timestamp))
-            if (now - timestamp) > timeout and name:
-                if send_pipe:
-                    send_pipe.send(name)
-                return
+            process_stats['stats'][name.decode()] = int(now-timestamp)
+        logger.info(json.dumps(process_stats))
+        if any([(now - timestamp) > timeout for timestamp in ticks.values()]):
+            return
         await asyncio.sleep(tick_cycle - (time.time() - now))
-
-
-def diag():
-    _diag = {'pyvers': sys.hexversion, 'exec': sys.executable, 'pid': os.getpid(), 'cwd': os.getcwd(), 'prefix': sys.exec_prefix, 'sys.path': sys.path}
-    logger.info(str(_diag))
-    return _diag
 
 
 def main():
