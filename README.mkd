@@ -74,6 +74,16 @@ For encrypted messages (Node-Backend,Backend-App) - a simple packet framing prot
 
 #### Flowgraph
 
+```
+analog_to_block -> block_to_sample -> (sample_to_datastore, sample_to_upstream)
+```
+
+ * `analog_to_block` - sits on full-bandwidth RTLSDR data stream, monitors piecewise measures the amplitude of a block of samples and compares to a running threshold. Accumulates high-amplitude blocks, storing the result as a compressed timestamped blob in Redis.
+ * `block_to_sample` - attempts to decode blocks of radio information to temperature and humidity samples.
+ * `sample_to_datastore` - records temperature and humidity samples to a Sqlite database.
+ * `sample_to_upstream` - accumulates samples to form a frame representing current local state. If it's been more than a few seconds since the last update, encrypt and transmit a frame to the upstream server.
+ * `band_monitor` - periodically logs the number of successful and unsuccessfully demodulated blocks on different bands.
+ * `sensor_monitor` - periodically logs the number of readings seen and the time since last transmission for all sensors
 
 ### Backend Operation
 
@@ -81,16 +91,16 @@ The backend has two purposes (may be separated out into two services) - communic
 
 #### Flowgraph
 
- * UDP socket -> 'udp_inbound'
- * 'udp_inbound' -> 'updates_{uid}' for each Node UID
-  * data also stored to 'most_recent' at the Node UID
+ * UDP socket -> `udp_inbound`
+ * `udp_inbound` -> 'updates_{uid}' for each Node UID
+   * data also stored to 'most_recent' at the Node UID
 
 #### HTTP Endpoints
 
 NB: all discussed endpoints are POST due to our mapping of our encrypted protocol's semantics onto HTTP
 
- * /latest -> get the latest data from the sensors for your node
- * /register -> tell backend to expect data from a Node
- * /signup -> create a new user account, registering the pubkey to the account
- * /login -> signup to an existing user account with email and password, regstering a new pubkey to the account
+ * `/latest` -> get the latest data from the sensors for your node
+ * `/register` -> tell backend to expect data from a Node
+ * `/signup` -> create a new user account, registering the pubkey to the account
+ * `/login` -> signup to an existing user account with email and password, registering a new pubkey to the account
 
