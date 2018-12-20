@@ -51,6 +51,8 @@ Arbitrary information is passed by timestamp and stored in Redis in CBOR seriali
 A watchdog monitors queues and restarts all subblocks if more than a few minutes pass without activity on each queues.
 Data is both stored to a local Sqlite database and sent, encrypted with asym/pubkey crypto, via UDP to a daemon running on data.sproutwave.com.
 
+
+
 The Node code interprets the RF samples from the RTLSDR and decodes temperature and humidity samples from sensors.
 
 
@@ -63,15 +65,32 @@ When a reading is received over UDP, the key is looked up, the reading is decryp
 
 ### Communication
 
-For encrypted messages (Node-Backend,Backend-App) - a simple packet framing protocol is used in conjunction with CBOR and NaCl crypto primitives to ensure the
-confidentiality and integrity of messages on the wire without relying on standard TLS trust models - the compromise of the internet connection should not allow
-the modification, forging, or monitoring of messages in the Sproutwave system.
+For encrypted messages (Node-Backend,Backend-App) - a simple packet framing protocol is used in conjunction with CBOR and NaCl crypto primitives to ensure the confidentiality and integrity of messages on the wire without relying on standard TLS trust models - the compromise of the internet connection or device trust store should not allow the modification, forging, or monitoring of messages on the wire.
 
 
 
 
-#### Flowgraph Blocks
+### Node Operation
+
+#### Flowgraph
 
 
+### Backend Operation
 
-####
+The backend has two purposes (may be separated out into two services) - communication with the Node and communication with the App.
+
+#### Flowgraph
+
+ * UDP socket -> 'udp_inbound'
+ * 'udp_inbound' -> 'updates_{uid}' for each Node UID
+  * data also stored to 'most_recent' at the Node UID
+
+#### HTTP Endpoints
+
+NB: all discussed endpoints are POST due to our mapping of our encrypted protocol's semantics onto HTTP
+
+ * /latest -> get the latest data from the sensors for your node
+ * /register -> tell backend to expect data from a Node
+ * /signup -> create a new user account, registering the pubkey to the account
+ * /login -> signup to an existing user account with email and password, regstering a new pubkey to the account
+
