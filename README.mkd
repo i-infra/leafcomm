@@ -92,8 +92,8 @@ The backend has two purposes (may be separated out into two services) - communic
 #### Flowgraph
 
  * UDP socket -> `udp_inbound`
- * `udp_inbound` -> 'updates_{uid}' for each Node UID
-   * data also stored to 'most_recent' at the Node UID
+ * `udp_inbound` -> `updates_{uid}` for each Node UID
+   * latest data also stored in Redis to hashmap `most_recent` at the Node UID
 
 #### HTTP Endpoints
 
