@@ -1,0 +1,77 @@
+### Dev Setup
+
+From Ubuntu 18.04, inside the 'node' directory:
+``` bash
+sudo apt install libpython3.7-dev libopenblas-dev python3.7 redis-server git gfortran
+sudo python3 -m pip install pipenv
+pipenv --python 3.7 --verbose install
+```
+
+### Terminology
+
+ * The Node is the tiny computer located in a dry part of a growing space, plugged into the wall, that catches temperature and humidity readings and sends them
+   to our backend server where we threshold the readings and notify our users if they exceed limits.
+ * The Backend is the software running on our server that saves your data and notifies you if your growing space gets too warm.
+ The Backend runs on data.sproutwave.com.
+ * The App is the software which runs on our user's phones and allows them to monitor current conditions and set notification preferences.
+
+### Included Software
+```
+aiohttp==3.5.0a1
+  - async-timeout [required: >=3.0,<4.0, installed: 3.0.1]
+  - attrs [required: >=17.3.0, installed: 18.2.0]
+  - chardet [required: >=2.0,<4.0, installed: 3.0.4]
+  - multidict [required: >=4.0,<5.0, installed: 4.5.2]
+  - yarl [required: >=1.0,<2.0, installed: 1.3.0]
+    - idna [required: >=2.0, installed: 2.8]
+    - multidict [required: >=4.0, installed: 4.5.2]
+aioredis==1.2.0
+  - async-timeout [required: Any, installed: 3.0.1]
+  - hiredis [required: Any, installed: 0.3.0]
+blosc==1.6.3.dev0
+Bottleneck==1.2.1
+  - numpy [required: Any, installed: 1.15.4]
+cbor==1.0.0
+Cython==0.29.2
+PyNaCl==1.4.0.dev1
+  - cffi [required: >=1.4.1, installed: 1.11.5]
+    - pycparser [required: Any, installed: 2.19]
+  - six [required: Any, installed: 1.12.0]
+pyrtlsdr==0.2.91
+```
+
+### Design
+
+Many portions of the Sproutwave system are implemented as a directed acyclic flowgraph, with information sent between functional blocks in one direction at a
+time, without the sender waiting for the receiver to receive the message, implementing [Kahn Process Network] semantics with Redis LRU / expiration eviction limiting both maximum memory
+and the maximum amount of time a message can occupy usable RAM.
+
+Functional blocks wait for new data to become available.
+Arbitrary information is passed by timestamp and stored in Redis in CBOR serialized form.
+A watchdog monitors queues and restarts all subblocks if more than a few minutes pass without activity on each queues.
+Data is both stored to a local Sqlite database and sent, encrypted with asym/pubkey crypto, via UDP to a daemon running on data.sproutwave.com.
+
+The Node code interprets the RF samples from the RTLSDR and decodes temperature and humidity samples from sensors.
+
+
+The backend code is implemented as a basic HTTP microservice with additional functionality for catching UDP updates from deployed Nodes and monitor
+
+A Node makes an encrypted POST request to the /register endpoint telling the Backend to expect readings encrypted with a particular encryption key.
+
+When a reading is received over UDP, the key is looked up, the reading is decrypted, this most recent reading is stored, and the reading is made available for alert handlers.
+
+
+### Communication
+
+For encrypted messages (Node-Backend,Backend-App) - a simple packet framing protocol is used in conjunction with CBOR and NaCl crypto primitives to ensure the
+confidentiality and integrity of messages on the wire without relying on standard TLS trust models - the compromise of the internet connection should not allow
+the modification, forging, or monitoring of messages in the Sproutwave system.
+
+
+
+
+#### Flowgraph Blocks
+
+
+
+####
