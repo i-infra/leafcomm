@@ -4,4 +4,3 @@ upstream_host = 'data.sproutwave.com'
 upstream_port = 8019
 upstream_protocol = 'http'
 counter_width_bytes = 4
-websocket_update_period = 5
