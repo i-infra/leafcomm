@@ -14,8 +14,7 @@ bottleneck = "*"
 blosc = {git = "https://github.com/Blosc/python-blosc.git"}
 aiohttp = "*"
 aioredis = "*"
-
-[dev-packages]
+scipy = "*"
 
 [scripts]
 lint = "bash scripts/lint"
