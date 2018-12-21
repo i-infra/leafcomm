@@ -16,7 +16,7 @@ async def test_signup():
     async with aiohttp.client.ClientSession() as client:
         async with client.post(url=f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/signup', data=msg) as resp:
             resp_bytes = await resp.read()
-            print('signup <- ', await unpacker(resp_bytes))
+            print('signup <- ', await unpacker(base64.b64decode(resp_bytes)))
 
 
 async def test_login():
@@ -29,12 +29,12 @@ async def test_login():
     async with aiohttp.client.ClientSession() as client:
         async with client.post(url=f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/login', data=msg) as resp:
             resp_bytes = await resp.read()
-            print('login <- ', await unpacker(resp_bytes))
+            print('login <- ', await unpacker(base64.b64decode(resp_bytes)))
         human_name, uid = get_hardware_uid()
         msg = await packer(human_name)
         async with client.post(url=f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/latest', data=msg) as resp:
             resp_bytes = await resp.read()
-            print('latest <- ', await unpacker(resp_bytes))
+            print('latest <- ', await unpacker(base64.b64decode(resp_bytes)))
 
 
 handlebars.multi_spawner(test_signup).join()

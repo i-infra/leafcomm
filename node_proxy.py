@@ -14,6 +14,7 @@ import user_datastore
 import pathlib
 import os
 import sys
+import base64
 
 logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
@@ -100,7 +101,7 @@ async def start_authenticated_session(request):
         await connection.hset('user_pubkey_uid_mapping', pubkey_bytes.hex(), user_info.node_id)
         await connection.hset('user_timestamp_authed_pubkey', pubkey_bytes.hex(), time.time())
     encrypted_message = await packer(msg)
-    return web.Response(body=encrypted_message, content_type='application/octet-stream')
+    return web.Response(text=base64.b64encode(encrypted_message))
 
 
 async def get_latest(request):
@@ -121,7 +122,7 @@ async def get_latest(request):
         encrypted_message = await packer(cbor.loads(latest))
     else:
         encrypted_message = await packer('NO DATA YET')
-    return web.Response(body=encrypted_message, content_type='application/octet-stream')
+    return web.Response(text=base64.b64encode(encrypted_message))
 
 
 def create_app(loop):
