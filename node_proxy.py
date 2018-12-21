@@ -67,7 +67,7 @@ async def redistribute(loop=None):
                 unpacker = unpackers[pubkey_bytes]
             uid = await redis_connection.hget('node_pubkey_uid_mapping', pubkey_bytes.hex())
             update_msg = await unpacker(udp_bytes)
-            logger.info(f'{uid.decode()} {update_msg}')
+            #logger.info(f'{uid.decode()} {update_msg}')
             await redis_connection.hset('most_recent', uid, cbor.dumps(update_msg))
             await pseudopub(redis_connection, [f'updates_{uid.decode()}'], None, update_msg)
 
@@ -89,19 +89,28 @@ async def start_authenticated_session(request):
         if user_signin_status == user_datastore.Status.NO_SUCH_USER:
             user_signin_status = users_db.add_user(
                 msg.get('name'), msg.get('email'), msg.get('phone'), msg.get('passwordHash'), msg.get('passwordHint'), msg.get('nodeSecret'))
-        msg = ('signup', str(user_signin_status), dataclasses.asdict(user_info))
+        print(user_info)
+        if user_info is not None:
+            serialized_user = dataclasses.asdict(user_info)
+        else:
+            serialized_user = 'None'
+        msg = ('signup', str(user_signin_status), serialized_user)
     if 'login' in request.rel_url.path:
         login_required_fields = ['email', 'passwordHash']
         for key in login_required_fields:
             assert msg.get(key)
         user_signin_status, user_info = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
+        if user_info is not None:
+            serialized_user = dataclasses.asdict(user_info)
+        else:
+            serialized_user = 'None'
         print(user_info)
-        msg = ('login', str(user_signin_status), dataclasses.asdict(user_info))
+        msg = ('login', str(user_signin_status), serialized_user)
     if user_signin_status == user_datastore.Status.SUCCESS:
         await connection.hset('user_pubkey_uid_mapping', pubkey_bytes.hex(), user_info.node_id)
         await connection.hset('user_timestamp_authed_pubkey', pubkey_bytes.hex(), time.time())
     encrypted_message = await packer(msg)
-    return web.Response(text=base64.b64encode(encrypted_message))
+    return web.Response(text=base64.b64encode(encrypted_message).decode())
 
 
 async def get_latest(request):
@@ -122,7 +131,7 @@ async def get_latest(request):
         encrypted_message = await packer(cbor.loads(latest))
     else:
         encrypted_message = await packer('NO DATA YET')
-    return web.Response(text=base64.b64encode(encrypted_message))
+    return web.Response(text=base64.b64encode(encrypted_message).decode())
 
 
 def create_app(loop):

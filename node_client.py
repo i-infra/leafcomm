@@ -10,7 +10,7 @@ async def test_signup():
     password_hash = nacl.hash.sha512('test password'.encode()).decode()
     signup_message = dict(
         zip('email name nodeSecret passwordHash passwordHint phone'.split(),
-            f'test@test.com test_name {uid.hex()} {password_hash} test_password 8675309'.split()))
+            f'tester@test.com test_name {uid.hex()} {password_hash} test_password 8675309'.split()))
     print('signup -> ', signup_message)
     msg = await packer(signup_message)
     async with aiohttp.client.ClientSession() as client:
@@ -24,7 +24,7 @@ async def test_login():
     packer, unpacker = get_packer_unpacker(redis_connection, _constants.upstream_pubkey_bytes)
     human_name, uid = get_hardware_uid()
     password_hash = nacl.hash.sha512('test password'.encode()).decode()
-    signup_message = dict(zip('email passwordHash'.split(), f'test@test.com {password_hash}'.split()))
+    signup_message = dict(zip('email passwordHash'.split(), f'tester@test.com {password_hash}'.split()))
     msg = await packer(signup_message)
     async with aiohttp.client.ClientSession() as client:
         async with client.post(url=f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/login', data=msg) as resp:
