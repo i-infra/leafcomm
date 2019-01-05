@@ -391,40 +391,43 @@ def get_hardware_uid() -> (str, bytes):
     return (human_name, hashed)
 
 
-async def register_session_box():
+async def register_session_box(aiohttp_client_session):
     """ register node with backend. """
-    import aiohttp
     human_name, uid = get_hardware_uid()
     logger.info('human name: %s' % human_name)
     packer, unpacker = get_packer_unpacker(await init_redis(), _constants.upstream_pubkey_bytes)
-    encrypted_msg = await packer(uid)
     url = f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/register'
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url=url, data=encrypted_msg) as resp:
-            if resp.status == 200:
-                encrypted_status = await resp.read()
-                status = await unpacker(encrypted_status)
-                return (uid, packer)
-            else:
-                raise Exception('sproutwave session key setup failed')
+    status = await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, url, uid)
+    logger.info(f'http successfully used to init uplink {status}')
+    return (uid, packer, unpacker)
 
+async def make_wrapped_http_request(aiohttp_client_session, packer, unpacker, url, msg):
+    encrypted_msg = await packer(msg)
+    async with aiohttp_client_session.post(url=url, data=encrypted_msg) as resp:
+        assert resp.status == 200
+        if resp.status == 200:
+            encrypted_response = await resp.read()
+            return await unpacker(encrypted_response)
 
 async def sample_to_upstream(loop=None):
-    """ accumulates frames of latest values and periodically encrypts and sends to upstream via udp """
+    """ accumulates frames of latest values and periodically encrypts and sends to upstream via udp
+     * sets up encrypted session over HTTP, ensures encryption key registered for node UID
+     * listens on 'upstream_channel' """
+    import socket
+    import aiohttp
     connection = await init_redis()
     await tick(connection)
-    import socket
     if loop == None:
         loop = asyncio.get_event_loop()
-    uid, packer = await register_session_box()
-    max_update_interval = 1
+    aiohttp_client_session = aiohttp.ClientSession(loop=loop)
+    uid, packer, unpacker = await register_session_box(aiohttp_client_session)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     samples = {}
-    last_sent = time.time()
+    last_sent = 0
+    max_update_interval = 1
     async for reading in pseudosub(connection, 'upstream_channel'):
         timestamp = reading.timestamp
         reading = reading.value
-        seen_count = int(await connection.hget(f'{redis_prefix}_sensor_uuid_counts', reading[1]) or '0')
         last_seen = float(await connection.hget(f'{redis_prefix}_sensor_uuid_timestamps', reading[1]) or '0')
         samples[reading[1] + 4096 * reading[2]] = reading
         if (time.time() > last_sent + max_update_interval):
@@ -433,6 +436,8 @@ async def sample_to_upstream(loop=None):
             update_message = await packer(update_samples)
             sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
             last_sent = time.time()
+        url = f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/check'
+        print('checking most recently seen', await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, url, uid))
 
 
 async def sample_to_datastore() -> typing.Awaitable[None]:
