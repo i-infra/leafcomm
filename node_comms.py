@@ -1,64 +1,77 @@
+import time
 import cbor
 import nacl
 import nacl.public
-import handlebars
+import ulid2
 
-import time
+import handlebars
 
 PUBKEY_SIZE = nacl.public.PublicKey.SIZE
 COUNTER_WIDTH = 4
+data_tag_label = "__"
+redis_prefix = "sproutwave"
 
-
-async def tick(connection, function_name_depth=1, key='sproutwave_ticks'):
+async def tick(connection, function_name_depth=1, key=f'{redis_prefix}_function_call_ticks'):
     name = handlebars.get_function_name(function_name_depth)
     await connection.hset(key, name, time.time())
 
 
-async def get_ticks(connection=None, key='sproutwave_ticks'):
+async def get_ticks(connection=None, key=f'{redis_prefix}_function_call_ticks'):
     if connection == None:
         connection = await init_redis()
     resp = await connection.hgetall(key)
     return {x: float(y) for (x, y) in resp.items()}
 
 
-async def pseudopub(connection, channels, timestamp=None, info=None):
+async def pseudopub(connection, channels, timestamp=None, reading=None):
     if isinstance(channels, str):
         channels = [channels]
     if not timestamp:
         timestamp = time.time()
-    await connection.set(timestamp, cbor.dumps(info))
+    ulid = ulid2.generate_ulid_as_base32(timestamp=timestamp)
+    data_tag = f"{data_tag_label}{ulid}"
+    await connection.set(data_tag, cbor.dumps(reading))
     for channel in channels:
-        await connection.lpush(channel, timestamp)
-    await connection.expireat(timestamp, int(timestamp + 600))
+        await connection.lpush(f'{redis_prefix}_{channel}', data_tag)
+    await connection.expireat(data_tag, int(timestamp + 600))
 
 
 async def pseudosub(connection, channel, timeout=360):
     while True:
         res = await pseudosub1(connection, channel, timeout)
-        if res:
+        if res.value:
             yield res
 
+class SerializedReading:
+    def __init__(self, ulid, cbor_bytes):
+        if isinstance(ulid, bytes):
+            self.ulid = ulid.decode()
+        else:
+            self.ulid = ulid
+        assert isinstance(self.ulid, str)
+        self.value = cbor.loads(cbor_bytes)
+        self.timestamp = ulid2.get_ulid_timestamp(self.ulid)
 
 async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):
-    channel, timestamp = await connection.brpop(channel, timeout)
-    info = await connection.get(timestamp)
+    channel, data_tag = await connection.brpop(f'{redis_prefix}_{channel}', timeout)
+    obj_bytes = await connection.get(data_tag)
+    ulid = data_tag.replace(data_tag_label.encode(), b'', 1)
     if do_tick == True:
         await tick(connection, function_name_depth=depth)
-    if info is not None:
-        return (float(timestamp), cbor.loads(info))
+    return SerializedReading(ulid, obj_bytes)
 
 
 async def get_next_counter(counter_name, redis_connection):
-    current_value = await redis_connection.hincrby('message_counters', counter_name, 1)
+    current_value = await redis_connection.hincrby(f'{redis_prefix}_message_counters', counter_name, 1)
     return current_value
 
 
 async def check_counter(counter_name, redis_connection, current_value):
-    last_counter = await redis_connection.hget('message_counters', counter_name)
+    last_counter = await redis_connection.hget(f'{redis_prefix}_message_counters', counter_name)
     if not last_counter:
         last_counter = 0
     if int(last_counter) < current_value:
-        await redis_connection.hset('message_counters', counter_name, current_value)
+        await redis_connection.hset(f'{redis_prefix}_message_counters', counter_name, current_value)
         return True
     else:
         raise Exception(f"{counter_name.hex()}: got {current_value} expected at least {int(last_counter)+1}")
