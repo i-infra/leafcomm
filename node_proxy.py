@@ -67,10 +67,24 @@ async def redistribute(loop=None):
                 unpacker = unpackers[pubkey_bytes]
             uid = await redis_connection.hget('node_pubkey_uid_mapping', pubkey_bytes.hex())
             update_msg = await unpacker(udp_bytes)
-            #logger.info(f'{uid.decode()} {update_msg}')
+            now = time.time()
             await redis_connection.hset('most_recent', uid, cbor.dumps(update_msg))
-            await pseudopub(redis_connection, [f'updates_{uid.decode()}'], None, update_msg)
+            await redis_connection.hset('most_recent_message_timestamp', uid, now)
+            await pseudopub(redis_connection, [f'updates_{uid.decode()}'], now, update_msg)
 
+async def check_received(request):
+    connection = request.app['redis']
+    posted_bytes = await request.read()
+    assert posted_bytes[0] == 1
+    pubkey_bytes = posted_bytes[1:PUBKEY_SIZE + 1]
+    packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
+    uid_bytes = await unpacker(posted_bytes)
+    uid_hex = await connection.hget('node_pubkey_uid_mapping', pubkey_bytes.hex())
+    assert uid_hex == uid_bytes.hex()
+    first_seen_pubkey = await connection.hget('node_first_seen_pubkey', pubkey_bytes.hex())
+    latest_msg_timestamp = await redis_connection.hget('most_recent_message_timestamp', uid_hex)
+    encrypted_message = await packer((latest_msg_timestamp-first_seen_pubkey, latest_msg_timestamp))
+    return web.Response(text=base64.b64encode(encrypted_message).decode())
 
 async def start_authenticated_session(request):
     connection = request.app['redis']
@@ -147,6 +161,7 @@ def create_app(loop):
     #app.router.add_get('/ws', init_ws)
     app.router.add_post('/latest', get_latest)
     app.router.add_post('/register', register_node)
+    app.router.add_post('/check', check_received)
     app.router.add_post('/signup', start_authenticated_session)
     app.router.add_post('/login', start_authenticated_session)
     app.on_startup.append(start_background_tasks)
