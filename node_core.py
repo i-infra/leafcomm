@@ -415,29 +415,41 @@ async def sample_to_upstream(loop=None):
      * listens on 'upstream_channel' """
     import socket
     import aiohttp
+    heartbeat_url = f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/check'
     connection = await init_redis()
     await tick(connection)
     if loop == None:
         loop = asyncio.get_event_loop()
     aiohttp_client_session = aiohttp.ClientSession(loop=loop)
     uid, packer, unpacker = await register_session_box(aiohttp_client_session)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_uplink_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     samples = {}
     last_sent = 0
-    max_update_interval = 1
+    max_update_interval = 60
+    max_intervals_till_check = 10
+    intervals_till_next_verification = max_intervals_till_check
     async for reading in pseudosub(connection, 'upstream_channel'):
         timestamp = reading.timestamp
         reading = reading.value
         last_seen = float(await connection.hget(f'{redis_prefix}_sensor_uuid_timestamps', reading[1]) or '0')
         samples[reading[1] + 4096 * reading[2]] = reading
-        if (time.time() > last_sent + max_update_interval):
+        now = time.time()
+        if intervals_till_next_verification == 0:
+            first_seen, most_recently_seen = await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, heartbeat_url, uid)
+            since_last_seen = int(now-most_recently_seen)
+            if since_last_seen > 5 * max_update_interval:
+                logger.error('backend reports 5x longer since last update than expected, terminating uplink')
+                raise TimeoutError
+            else:
+                logger.info(f'backend confirms update received {int(now-most_recently_seen)}')
+                intervals_till_next_verification = max_intervals_till_check
+        if now > (last_sent + max_update_interval):
             update_samples = [x for x in samples.values()]
             logger.info(f'submitting {update_samples}')
             update_message = await packer(update_samples)
-            sock.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
+            udp_uplink_socket.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
             last_sent = time.time()
-        url = f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/check'
-        print('checking most recently seen', await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, url, uid))
+            intervals_till_next_verification -= 1
 
 
 async def sample_to_datastore() -> typing.Awaitable[None]:

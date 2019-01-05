@@ -49,7 +49,10 @@ class SerializedReading:
         else:
             self.ulid = ulid
         assert isinstance(self.ulid, str)
-        self.value = cbor.loads(cbor_bytes)
+        if cbor_bytes:
+            self.value = cbor.loads(cbor_bytes)
+        else:
+            self.value = None
         self.timestamp = ulid2.get_ulid_timestamp(self.ulid)
 
 async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):

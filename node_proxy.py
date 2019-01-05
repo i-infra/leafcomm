@@ -48,8 +48,8 @@ async def register_node(request):
     uid_bytes = await unpacker(posted_bytes)
     status = b'\x01'
     encrypted_status = await packer(status)
-    await connection.hset('node_pubkey_uid_mapping', pubkey_bytes.hex(), uid_bytes.hex())
-    await connection.hset('node_first_seen_pubkey', pubkey_bytes.hex(), time.time())
+    await connection.hset(f'{redis_prefix}_node_pubkey_uid_mapping', pubkey_bytes.hex(), uid_bytes.hex())
+    await connection.hset(f'{redis_prefix}_node_earliest_timestamp_pubkey', pubkey_bytes.hex(), time.time())
     return web.Response(body=encrypted_status, status=200)
 
 
@@ -65,12 +65,12 @@ async def redistribute(loop=None):
             unpackers[pubkey_bytes] = unpacker
         else:
             unpacker = unpackers[pubkey_bytes]
-        uid = await redis_connection.hget('node_pubkey_uid_mapping', pubkey_bytes.hex())
+        uid = await redis_connection.hget(f'{redis_prefix}_node_pubkey_uid_mapping', pubkey_bytes.hex())
         try:
             update_msg = await unpacker(udp_bytes)
             now = time.time()
-            await redis_connection.hset('most_recent', uid, cbor.dumps(update_msg))
-            await redis_connection.hset('most_recent_message_timestamp', uid, now)
+            await redis_connection.hset(f'{redis_prefix}_latest_value_frame', uid, cbor.dumps(update_msg))
+            await redis_connection.hset(f'{redis_prefix}_latest_message_timestamp', uid, now)
             await pseudopub(redis_connection, [f'updates_{uid.decode()}'], now, update_msg)
         except:
             pass
@@ -82,13 +82,13 @@ async def check_received(request):
     pubkey_bytes = posted_bytes[1:PUBKEY_SIZE + 1]
     packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
     uid_bytes = await unpacker(posted_bytes)
-    uid_hex = (await connection.hget('node_pubkey_uid_mapping', pubkey_bytes.hex())).decode()
+    uid_hex = (await connection.hget(f'{redis_prefix}_node_pubkey_uid_mapping', pubkey_bytes.hex()) or b'').decode()
     assert uid_hex == uid_bytes.hex()
-    first_seen_pubkey = await connection.hget('node_first_seen_pubkey', pubkey_bytes.hex())
-    timestamp_first_seen = float(first_seen_pubkey or b'0')
-    latest_msg_timestamp = await connection.hget('most_recent_message_timestamp', uid_hex)
+    earliest_timestamp_pubkey = await connection.hget(f'{redis_prefix}_node_earliest_timestamp_pubkey', pubkey_bytes.hex())
+    latest_msg_timestamp = await connection.hget(f'{redis_prefix}_latest_message_timestamp', uid_hex)
+    earliest_timestamp = float(earliest_timestamp_pubkey or b'0')
     timestamp_latest_msg = float(latest_msg_timestamp or b'0')
-    encrypted_message = await packer((timestamp_first_seen, timestamp_latest_msg))
+    encrypted_message = await packer((earliest_timestamp, timestamp_latest_msg))
     return web.Response(body=encrypted_message)
 
 async def start_authenticated_session(request):
@@ -123,8 +123,8 @@ async def start_authenticated_session(request):
             serialized_user = 'None'
         msg = ('login', str(user_signin_status), serialized_user)
     if user_signin_status == user_datastore.Status.SUCCESS:
-        await connection.hset('user_pubkey_uid_mapping', pubkey_bytes.hex(), user_info.node_id)
-        await connection.hset('user_timestamp_authed_pubkey', pubkey_bytes.hex(), time.time())
+        await connection.hset(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex(), user_info.node_id)
+        await connection.hset(f'{redis_prefix}_user_timestamp_authed_pubkey', pubkey_bytes.hex(), time.time())
     encrypted_message = await packer(msg)
     return web.Response(text=base64.b64encode(encrypted_message).decode())
 
@@ -140,9 +140,9 @@ async def get_latest(request):
     else:
         packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
         request.app['packers'][pubkey_bytes] = (packer, unpacker)
-    uid = await connection.hget('user_pubkey_uid_mapping', pubkey_bytes.hex())
+    uid = await connection.hget(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex())
     msg = await unpacker(posted_bytes)
-    latest = await connection.hget('most_recent', uid)
+    latest = await connection.hget(f'{redis_prefix}_latest_value_frame', uid)
     if latest is not None:
         encrypted_message = await packer(cbor.loads(latest))
     else:
