@@ -39,7 +39,7 @@ async def pseudopub(connection, channels, timestamp=None, reading=None):
 async def pseudosub(connection, channel, timeout=360):
     while True:
         res = await pseudosub1(connection, channel, timeout)
-        if res.value:
+        if res and res.value:
             yield res
 
 class SerializedReading:
