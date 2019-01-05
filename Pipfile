@@ -15,6 +15,7 @@ blosc = {git = "https://github.com/Blosc/python-blosc.git"}
 aiohttp = "*"
 aioredis = "*"
 scipy = "*"
+"ulid2" = "*"
 
 [scripts]
 lint = "bash scripts/lint"
