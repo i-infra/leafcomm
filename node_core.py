@@ -119,7 +119,9 @@ async def analog_to_block() -> typing.Awaitable[None]:
     # primary sampling state machine
     # samples background amplitude, accumulate and transfer sample chunks significantly above ambient power
     async for byte_samples in sdr.stream(block_size, format='bytes'):
+        last_tick = float(await connection.hget(f'{redis_prefix}_function_call_ticks', handlebars.get_function_name()) or b'0')
         await tick(connection)
+        now_tick = float(await connection.hget(f'{redis_prefix}_function_call_ticks', handlebars.get_function_name()) or b'0')
         complex_samples = packed_bytes_to_iq(byte_samples)
         # calculate cum and avg power
         block_power = numpy.sum(numpy.abs(complex_samples))
@@ -154,7 +156,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     sampled_message = numpy.concatenate(blocks_accumulated)
                     info = compress(sampled_message)
                     info['center_frequency'] = center_frequency
-                    await pseudopub(connection, f'transmissions', timestamp=start_of_transmission_timestamp, reading=info)
+                    ulid = await pseudopub(connection, f'transmissions', timestamp=start_of_transmission_timestamp, reading=info)
                     logger.debug(
                         'flushing: %s' % {
                             'start_timestamp': start_of_transmission_timestamp,
@@ -163,7 +165,9 @@ async def analog_to_block() -> typing.Awaitable[None]:
                             'block_count': len(blocks_accumulated),
                             'message power': int(numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated)),
                             'avg': int(historical_background_power),
-                            'lifetime_blocks': sampled_background_block_count
+                            'lifetime_blocks': sampled_background_block_count,
+                            'iteration_duration': now_tick-time.time(),
+                            'ulid': ulid
                         })
                     await connection.hincrby(f'{redis_prefix}_found_maybe_good_transmission_at_frequency', center_frequency, 1)
                 else:
@@ -180,7 +184,8 @@ def block_to_pulses(compressed_iq_reading: SerializedReading, smoother: FilterFu
     beep_samples = decompress(**compressed_iq_reading.value)
     beep_absolute = numpy.abs(beep_samples)
     beep_smoothed = smoother(beep_absolute)
-    threshold = 1.1 * bottleneck.nanmean(beep_smoothed)
+    avg_power = bottleneck.nanmean(beep_smoothed)
+    threshold = 1.1 * avg_power
     beep_binary = beep_smoothed > threshold
     return Pulses(numpy.array(handlebars.rle(beep_binary)), compressed_iq_reading.ulid)
 
@@ -207,6 +212,8 @@ def pulses_to_breaks(pulses: Pulses, deciles: Deciles) -> typing.List[int]:
     """ with pulse array and definition of 'long' and 'short' pulses, find position of repeated packets """
     # heuristic - cutoff duration for a break between subsequent packets is at least 9x
     #  the smallest of the 'long' and 'short' pulses
+    if 0 not in deciles.keys() or 1 not in deciles.keys():
+        return []
     cutoff = min(deciles[0][0], deciles[1][0]) * 9
     breaks = numpy.logical_and(pulses.sequence.T[0] > cutoff, pulses.sequence.T[1] == L).nonzero()[0]
     break_deltas = numpy.diff(breaks)
