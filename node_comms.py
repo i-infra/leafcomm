@@ -34,6 +34,7 @@ async def pseudopub(connection, channels, timestamp=None, reading=None):
     for channel in channels:
         await connection.lpush(f'{redis_prefix}_{channel}', data_tag)
     await connection.expireat(data_tag, int(timestamp + 600))
+    return data_tag
 
 
 async def pseudosub(connection, channel, timeout=360):
