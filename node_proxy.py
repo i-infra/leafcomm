@@ -163,7 +163,7 @@ async def set_alerts(request):
     uid = await connection.hget(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex())
     msg = await unpacker(posted_bytes)
     if msg:
-        await connection.hset(f'{redis_prefix}_uid_alert_mapping', uid, msg)
+        await connection.hset(f'{redis_prefix}_uid_alert_mapping', uid, json.dumps(msg))
     else:
         alerts = connection.hget(f'{redis_prefix}_uid_alert_mapping', uid)
     if alerts is not None:
