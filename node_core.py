@@ -20,6 +20,8 @@ from node_comms import *
 import handlebars
 import _constants
 
+
+sampling_rate = 256_000
 L, H, E = 0, 1, 2
 logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 data_dir = os.path.expanduser('~/.sproutwave/')
@@ -64,7 +66,7 @@ try:
         return y
 
     def lowpass(xs):
-        return butter_filter(xs, 2000.0, 256000.0, 'low', order=4)
+        return butter_filter(xs, 2000.0, sampling_rate, 'low', order=4)
 
     filters = [brickwall, lowpass]
 except:
@@ -108,13 +110,13 @@ async def analog_to_block() -> typing.Awaitable[None]:
     import gc
     from rtlsdr import rtlsdraio
     sdr = rtlsdraio.RtlSdrAio()
-    sdr.rs, sdr.fc, sdr.gain = 256000, 433900000.0, 15
+    sdr.rs, sdr.fc, sdr.gain = sampling_rate, 433900000.0, 9
     connection = await init_redis()
     # number of bytes
     block_size = 512 * 64
     samp_size = block_size // 2
     # initial state
-    accumulating_blocks, blocks_accumulated, historical_power, sampled_background_block_count = False, [], 0, 1
+    accumulating_blocks, blocks_accumulated, historical_power, sampled_background_block_count = False, [], 0, 0
     center_frequency = 433900000.0
     # primary sampling state machine
     # samples background amplitude, accumulate and transfer sample chunks significantly above ambient power
@@ -125,6 +127,11 @@ async def analog_to_block() -> typing.Awaitable[None]:
         complex_samples = packed_bytes_to_iq(byte_samples)
         # calculate cum and avg power
         block_power = numpy.sum(numpy.abs(complex_samples))
+        # init accumulator safely
+        if historical_power == 0:
+            historical_power = block_power
+            logger.info(f"INIT WITH HISTORICAL POWER {historical_power}")
+            sampled_background_block_count += 1
         historical_background_power = historical_power / sampled_background_block_count
         #  do background ops if not accumulating data
         if sampled_background_block_count % 1000 == 1 and accumulating_blocks is False:
@@ -136,12 +143,9 @@ async def analog_to_block() -> typing.Awaitable[None]:
             sdr.set_center_freq(center_frequency)
             center_frequency = sdr.get_center_freq()
             logger.info('center frequency: %d' % center_frequency)
-        # init accumulator safely
-        if historical_power == 0:
-            historical_power = block_power
-            sampled_background_block_count += 1
-        if block_power > historical_background_power:
+        if block_power > historical_background_power * 1.02:
             if accumulating_blocks is False:
+                logger.info(f"STARTING ACCUMULATION with {block_power} compared to {historical_background_power}")
                 start_of_transmission_timestamp = time.time()
             historical_power += (block_power - historical_background_power) / 100.0
             accumulating_blocks = True
@@ -150,13 +154,14 @@ async def analog_to_block() -> typing.Awaitable[None]:
             historical_power += block_power
             sampled_background_block_count += 1
             if accumulating_blocks is True:
-                if len(blocks_accumulated) > 9:
+                len_accumulated = len(blocks_accumulated)
+                if len_accumulated > 9 and len_accumulated < 40:
                     end_of_transmission_timestamp = time.time()
                     blocks_accumulated.append(complex_samples)
                     sampled_message = numpy.concatenate(blocks_accumulated)
                     info = compress(sampled_message)
                     info['center_frequency'] = center_frequency
-                    ulid = await pseudopub(connection, f'transmissions', timestamp=start_of_transmission_timestamp, reading=info)
+                    ulid = await pseudopub(connection, 'transmissions', timestamp=start_of_transmission_timestamp, reading=info)
                     logger.debug(
                         'flushing: %s' % {
                             'start_timestamp': start_of_transmission_timestamp,
@@ -166,7 +171,7 @@ async def analog_to_block() -> typing.Awaitable[None]:
                             'message power': int(numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated)),
                             'avg': int(historical_background_power),
                             'lifetime_blocks': sampled_background_block_count,
-                            'iteration_duration': now_tick-time.time(),
+                            'iteration_duration': time.time()-now_tick,
                             'ulid': ulid
                         })
                     await connection.hincrby(f'{redis_prefix}_found_maybe_good_transmission_at_frequency', center_frequency, 1)
@@ -372,7 +377,7 @@ async def block_to_sample() -> typing.Awaitable[None]:
                 decoded = pulses_to_sample(pulses)
                 if decoded:
                     break
-        logger.info(f'decoded {decoded} with {filter_func.__name__}')
+            logger.info(f'decoded {decoded} with {filter_func.__name__}')
         if decoded:
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.degc, float(decoded.temperature)])
             await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.rh, float(decoded.humidity)])
@@ -520,6 +525,7 @@ async def watchdog(connection=None, threshold=600, key='sproutwave_function_call
             process_stats['stats'][name.decode()] = int(now-timestamp)
         logger.info(json.dumps(process_stats))
         if any([(now - timestamp) > timeout for timestamp in ticks.values()]):
+            await connection.delete(key)
             return
         await asyncio.sleep(tick_cycle - (time.time() - now))
 
