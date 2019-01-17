@@ -149,6 +149,29 @@ async def get_latest(request):
         encrypted_message = await packer('NO DATA YET')
     return web.Response(text=base64.b64encode(encrypted_message).decode())
 
+async def set_alerts(request):
+    connection = request.app['redis']
+    posted_bytes = await request.read()
+    assert posted_bytes[0] == 1
+    pubkey_bytes = posted_bytes[1:PUBKEY_SIZE + 1]
+    packer_unpacker = request.app['packers'].get(pubkey_bytes)
+    if packer_unpacker:
+        packer, unpacker = packer_unpacker
+    else:
+        packer, unpacker = get_packer_unpacker(connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
+        request.app['packers'][pubkey_bytes] = (packer, unpacker)
+    uid = await connection.hget(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex())
+    msg = await unpacker(posted_bytes)
+    if msg:
+        await connection.hset(f'{redis_prefix}_uid_alert_mapping', uid, msg)
+    else:
+        alerts = connection.hget(f'{redis_prefix}_uid_alert_mapping', uid)
+    if alerts is not None:
+        encrypted_message = await packer(cbor.loads(alerts))
+    else:
+        encrypted_message = await packer('NO ALERTS YET')
+    return web.Response(text=base64.b64encode(encrypted_message).decode())
+
 
 def create_app(loop):
     async def start_background_tasks(app):
@@ -161,6 +184,7 @@ def create_app(loop):
 
     app = web.Application()
     #app.router.add_get('/ws', init_ws)
+    app.router.add_post('/alerts', set_alerts)
     app.router.add_post('/latest', get_latest)
     app.router.add_post('/register', register_node)
     app.router.add_post('/check', check_received)
