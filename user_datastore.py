@@ -1,19 +1,37 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import sqlite3 as sql
 import time
 import tempfile
 import uuid
 from enum import Enum
 
-alert_default = ""
+from enforce_types import enforce_types
 
-
-class Status(Enum):
+class Status(int, Enum):
     WRONG_PASSWORD = 0
     NO_SUCH_USER = 1
     SUCCESS = 2
 
+class AlertMechanism(int, Enum):
+    EMAIL = 0
+    SMS = 1
 
+class Direction(int, Enum):
+    RISING = +1
+    FALLING = -1
+
+@enforce_types
+@dataclass
+class Alert:
+    name: str
+    enabled: bool
+    temp: float
+    direction: Direction
+    method: AlertMechanism
+    info: str
+    minimum_duration: int
+
+@enforce_types
 @dataclass
 class User:
     name: str
