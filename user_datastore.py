@@ -37,11 +37,11 @@ class User:
     name: str
     email: str
     phone: str
-    password_hash: bytes
+    password_hash: str
     password_meta: str
     node_id: str
-    alerts: bytes
-    app_settings: bytes
+    alerts: str
+    app_settings: str
 
 
 class UserDatabase(object):
