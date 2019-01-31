@@ -59,12 +59,10 @@ async def register_node(request):
     # TODO: generalize this for multiple versions
     connection = request.app['redis']
     posted_bytes = await request.read()
-    print(packer_unpacker_cache)
     pubkey_bytes, uid_bytes = await unwrap_message(posted_bytes, connection, packer_unpacker_cache)
-    print(packer_unpacker_cache)
     await connection.hset(f'{redis_prefix}_node_pubkey_uid_mapping', pubkey_bytes.hex(), uid_bytes.hex())
     await connection.hset(f'{redis_prefix}_node_earliest_timestamp_pubkey', pubkey_bytes.hex(), time.time())
-    msg = status = b'\x01'
+    msg = b'\x01'
     encrypted_message = await packer_unpacker_cache[pubkey_bytes][0](msg)
     return web.Response(body=encrypted_message)
 
@@ -83,7 +81,7 @@ async def redistribute(loop=None):
 async def check_received(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
-    pubkey_bytes, uid_bytes = await unwrap_message(posted_bytes, connection, request.app['packers'])
+    pubkey_bytes, uid_bytes = await unwrap_message(posted_bytes, connection)
     uid_hex = (await connection.hget(f'{redis_prefix}_node_pubkey_uid_mapping', pubkey_bytes.hex()) or b'').decode()
     assert uid_hex == uid_bytes.hex()
     earliest_timestamp_pubkey = await connection.hget(f'{redis_prefix}_node_earliest_timestamp_pubkey', pubkey_bytes.hex())
@@ -99,7 +97,6 @@ async def start_authenticated_session(request):
     users_db = request.app['users_db']
     posted_bytes = await request.read()
     pubkey_bytes, msg = await unwrap_message(posted_bytes, connection, packer_unpacker_cache)
-    print(msg)
     if 'signup' in request.rel_url.path:
         signup_required_fields = 'email name nodeSecret passwordHash passwordHint phone'.split()
         for key in signup_required_fields:
@@ -133,9 +130,7 @@ async def start_authenticated_session(request):
 async def get_latest(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
-    print(packer_unpacker_cache)
     pubkey_bytes, msg = await unwrap_message(posted_bytes, connection, packer_unpacker_cache)
-    print(packer_unpacker_cache)
     uid = await connection.hget(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex())
     latest = await connection.hget(f'{redis_prefix}_latest_value_frame', uid)
     if latest is not None:
