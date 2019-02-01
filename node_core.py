@@ -24,7 +24,6 @@ import _constants
 sampling_rate = 256_000
 L, H, E = 0, 1, 2
 logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
-data_dir = os.path.expanduser('~/.sproutwave/')
 
 FilterFunc = typing.Callable[[numpy.ndarray], numpy.ndarray]
 Deciles = typing.Dict[int, typing.Tuple[int, int]]
@@ -55,19 +54,17 @@ try:
     import scipy
     from scipy.signal import butter, lfilter, freqz
 
-    def butter_filter(data, cutoff, fs, btype='low', order=5):
+    def build_butter_filter(cutoff, fs, btype='low', order=5):
         normalized_cutoff = cutoff / (0.5 * fs)
         if btype == 'bandpass':
             normalized_cutoff = [normalized_cutoff // 10, normalized_cutoff]
         b, a = butter(order, normalized_cutoff, btype=btype, analog=False)
         b = b.astype('float32')
         a = a.astype('float32')
-        y = lfilter(b, a, data)
-        return y
-
+        return b, a
+    signal_filter_coefficients = dict(zip(('b', 'a'), build_butter_filter(2000, sampling_rate, order=4)))
     def lowpass(xs):
-        return butter_filter(xs, 2000.0, sampling_rate, 'low', order=4)
-
+        return lfilter(signal_filter_coefficients['b'], signal_filter_coefficients['a'], xs)
     filters = [brickwall, lowpass]
 except:
     filters = [brickwall]
@@ -90,10 +87,6 @@ def packed_bytes_to_iq(samples: bytes) -> numpy.ndarray:
     iq /= 127.5
     iq -= 1 + 1j
     return iq
-
-
-def init_redis(preface=''):
-    return handlebars.init_redis(data_dir + preface + 'sproutwave.sock')
 
 
 def get_new_center():
@@ -407,19 +400,11 @@ async def register_session_box(aiohttp_client_session):
     """ register node with backend. """
     human_name, uid = get_hardware_uid()
     logger.info('human name: %s' % human_name)
-    packer, unpacker = get_packer_unpacker(await init_redis(), _constants.upstream_pubkey_bytes)
+    packer, unpacker = await get_packer_unpacker(_constants.upstream_pubkey_bytes)
     url = f'{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/register'
     status = await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, url, uid)
     logger.info(f'http successfully used to init uplink {status}')
     return (uid, packer, unpacker)
-
-async def make_wrapped_http_request(aiohttp_client_session, packer, unpacker, url, msg):
-    encrypted_msg = await packer(msg)
-    async with aiohttp_client_session.post(url=url, data=encrypted_msg) as resp:
-        assert resp.status == 200
-        if resp.status == 200:
-            encrypted_response = await resp.read()
-            return await unpacker(encrypted_response)
 
 async def sample_to_upstream(loop=None):
     """ accumulates frames of latest values and periodically encrypts and sends to upstream via udp

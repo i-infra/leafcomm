@@ -1,15 +1,31 @@
+import os
 import time
 import cbor
 import nacl
 import nacl.public
 import ulid2
+import asyncio
+
+import base64
+import aiohttp
 
 import handlebars
 
+import _constants
+
 PUBKEY_SIZE = nacl.public.PublicKey.SIZE
 COUNTER_WIDTH = 4
+CURRENT_PROTOCOL_VERSION = 1
 data_tag_label = "__"
 redis_prefix = "sproutwave"
+
+data_dir = os.path.expanduser('~/.sproutwave/')
+
+def init_redis(preface=''):
+    return handlebars.init_redis(data_dir + preface + 'sproutwave.sock')
+
+import cacheutils
+
 
 async def tick(connection, function_name_depth=1, key=f'{redis_prefix}_function_call_ticks'):
     name = handlebars.get_function_name(function_name_depth)
@@ -80,11 +96,33 @@ async def check_counter(counter_name, redis_connection, current_value):
     else:
         raise Exception(f"{counter_name.hex()}: got {current_value} expected at least {int(last_counter)+1}")
 
+packer_unpacker_cache = cacheutils.LRI(128)
 
-def get_packer_unpacker(redis_connection, peer_pubkey_bytes, local_privkey_bytes=None):
+async def unwrap_message(message_bytes, redis_connection = None):
+    """ high level abstraction accepting a byte sequence and returning the pubkey and message.
+    will attempt to reuse existing crypto intermediate values. """
+    global packer_unpacker_cache
+    redis_connection = redis_connection or await init_redis('proxy')
+    pubkey_bytes = message_bytes[1:PUBKEY_SIZE + 1]
+    if pubkey_bytes not in packer_unpacker_cache.keys():
+        packer, unpacker = await get_packer_unpacker(pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes, redis_connection = redis_connection)
+        packer_unpacker_cache[pubkey_bytes] = (packer, unpacker)
+    else:
+        packer, unpacker = packer_unpacker_cache[pubkey_bytes]
+    unpacked_message = await unpacker(message_bytes)
+    return pubkey_bytes, unpacked_message
+
+async def wrap_message(pubkey_bytes, message, redis_connection = None, b64=False):
+    global packer_unpacker_cache
+    encrypted_message = await packer_unpacker_cache[pubkey_bytes][0](message)
+    if b64:
+        encrypted_message = base64.b64encode(encrypted_message)
+    return encrypted_message
+
+
+async def get_packer_unpacker(peer_pubkey_bytes, local_privkey_bytes=None, redis_connection = None):
     # TODO: compression
-    version_tag = b'\x01'
-    version_int = int.from_bytes(version_tag, 'little')
+    redis_connection = redis_connection or await init_redis()
     peer_public_key = nacl.public.PublicKey(peer_pubkey_bytes)
     if local_privkey_bytes is None:
         local_privkey = nacl.public.PrivateKey.generate()
@@ -93,20 +131,30 @@ def get_packer_unpacker(redis_connection, peer_pubkey_bytes, local_privkey_bytes
     session_box = nacl.public.Box(local_privkey, peer_public_key)
     local_pubkey_bytes = local_privkey.public_key.encode()
     counter_name = local_pubkey_bytes + peer_pubkey_bytes
-
     async def packer(message):
         nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
         counter = await get_next_counter(counter_name, redis_connection)
         counter_bytes = counter.to_bytes(COUNTER_WIDTH, 'little')
         cyphertext = session_box.encrypt(counter_bytes + cbor.dumps(message), nonce)
-        return version_tag + local_pubkey_bytes + cyphertext
+        return CURRENT_PROTOCOL_VERSION.to_bytes(1, 'little') + local_pubkey_bytes + cyphertext
 
     async def unpacker(message):
         message_version = message[0]
-        assert message_version == version_int
+        assert message_version == CURRENT_PROTOCOL_VERSION
         plaintext = session_box.decrypt(message[1 + PUBKEY_SIZE:])
         counter = int.from_bytes(plaintext[:COUNTER_WIDTH], 'little')
         if await check_counter(counter_name, redis_connection, counter):
             return cbor.loads(plaintext[COUNTER_WIDTH:])
 
     return packer, unpacker
+
+
+async def make_wrapped_http_request(aiohttp_client_session, packer, unpacker, url, msg):
+    encrypted_msg = await packer(msg)
+    async with aiohttp_client_session.post(url=url, data=encrypted_msg) as resp:
+        assert resp.status == 200
+        encrypted_response = await resp.read()
+        if resp.content_type == 'application/base64':
+            encrypted_response = base64.b64decode(encrypted_response)
+        return await unpacker(encrypted_response)
+

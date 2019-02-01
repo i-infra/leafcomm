@@ -1,32 +1,17 @@
 from node_comms import *
 import ssl
-import json
 import aiohttp
-import functools as f
 import handlebars
 import _constants
 from aiohttp import web
 import logging
 import asyncio
-import nacl
 import dataclasses
 import user_datastore
 import pathlib
-import os
 import sys
-import base64
 
 logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
-
-data_dir = os.path.expanduser('~/.sproutwave/')
-
-import cacheutils
-
-packer_unpacker_cache = cacheutils.LRI(128)
-
-def init_redis(preface=''):
-    return handlebars.init_redis(data_dir + preface + 'sproutwave.sock')
-
 
 class ProxyDatagramProtocol(asyncio.DatagramProtocol):
     def __init__(self, loop, connection):
@@ -40,38 +25,20 @@ class ProxyDatagramProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         self.loop.create_task(pseudopub(self.connection, ['udp_inbound'], None, data))
 
-
-async def unwrap_message(message_bytes, redis_connection = None, packer_unpacker_cache_ = {}):
-    global packer_unpacker_cache
-    redis_connection = redis_connection or await init_redis('proxy')
-    assert message_bytes[0] == 1
-    pubkey_bytes = message_bytes[1:PUBKEY_SIZE + 1]
-    if pubkey_bytes not in packer_unpacker_cache.keys():
-        packer, unpacker = get_packer_unpacker(redis_connection, pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes)
-        packer_unpacker_cache[pubkey_bytes] = (packer, unpacker)
-    else:
-        packer, unpacker = packer_unpacker_cache[pubkey_bytes]
-    unpacked_message = await unpacker(message_bytes)
-    return pubkey_bytes, unpacked_message#, packer_unpacker_cache
-
-
 async def register_node(request):
-    # TODO: generalize this for multiple versions
     connection = request.app['redis']
     posted_bytes = await request.read()
-    pubkey_bytes, uid_bytes = await unwrap_message(posted_bytes, connection, packer_unpacker_cache)
+    pubkey_bytes, uid_bytes = await unwrap_message(posted_bytes, connection)
     await connection.hset(f'{redis_prefix}_node_pubkey_uid_mapping', pubkey_bytes.hex(), uid_bytes.hex())
     await connection.hset(f'{redis_prefix}_node_earliest_timestamp_pubkey', pubkey_bytes.hex(), time.time())
-    msg = b'\x01'
-    encrypted_message = await packer_unpacker_cache[pubkey_bytes][0](msg)
+    encrypted_message = await wrap_message(pubkey_bytes, b'\x01', connection)
     return web.Response(body=encrypted_message)
 
 async def redistribute(loop=None):
     redis_connection = await init_redis("proxy")
-    packer_unpacker_cache = {}
     async for udp_reading in pseudosub(redis_connection, 'udp_inbound'):
         udp_bytes = udp_reading.value
-        pubkey_bytes, update_msg = await unwrap_message(udp_bytes, redis_connection, packer_unpacker_cache)
+        pubkey_bytes, update_msg = await unwrap_message(udp_bytes, redis_connection)
         uid = await redis_connection.hget(f'{redis_prefix}_node_pubkey_uid_mapping', pubkey_bytes.hex())
         now = time.time()
         await redis_connection.hset(f'{redis_prefix}_latest_value_frame', uid, cbor.dumps(update_msg))
@@ -96,7 +63,7 @@ async def start_authenticated_session(request):
     connection = request.app['redis']
     users_db = request.app['users_db']
     posted_bytes = await request.read()
-    pubkey_bytes, msg = await unwrap_message(posted_bytes, connection, packer_unpacker_cache)
+    pubkey_bytes, msg = await unwrap_message(posted_bytes, connection)
     if 'signup' in request.rel_url.path:
         signup_required_fields = 'email name nodeSecret passwordHash passwordHint phone'.split()
         for key in signup_required_fields:
@@ -123,22 +90,22 @@ async def start_authenticated_session(request):
     if user_signin_status == user_datastore.Status.SUCCESS:
         await connection.hset(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex(), user_info.node_id)
         await connection.hset(f'{redis_prefix}_user_timestamp_authed_pubkey', pubkey_bytes.hex(), time.time())
-    encrypted_message = await packer_unpacker_cache[pubkey_bytes][0](msg)
-    return web.Response(text=base64.b64encode(encrypted_message).decode())
+    encoded_encrypted_message = await wrap_message(pubkey_bytes, msg, connection, b64=True)
+    return web.Response(body=encoded_encrypted_message, content_type='application/base64')
 
 
 async def get_latest(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
-    pubkey_bytes, msg = await unwrap_message(posted_bytes, connection, packer_unpacker_cache)
+    pubkey_bytes, msg = await unwrap_message(posted_bytes, connection)
     uid = await connection.hget(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex())
     latest = await connection.hget(f'{redis_prefix}_latest_value_frame', uid)
     if latest is not None:
         response = cbor.loads(latest)
     else:
         response = 'NO DATA YET'
-    encrypted_message = await packer_unpacker_cache[pubkey_bytes][0](response)
-    return web.Response(text=base64.b64encode(encrypted_message).decode())
+    encoded_encrypted_message = await wrap_message(pubkey_bytes, response, connection, b64=True)
+    return web.Response(body=encoded_encrypted_message, content_type='application/base64')
 
 async def set_alerts(request):
     connection = request.app['redis']
@@ -146,15 +113,15 @@ async def set_alerts(request):
     pubkey_bytes, msg = await unwrap_message(posted_bytes, connection, packer_unpacker_cache)
     uid = await connection.hget(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex())
     if msg:
-        await connection.hset(f'{redis_prefix}_uid_alert_mapping', uid, json.dumps(msg))
+        await connection.hset(f'{redis_prefix}_uid_alert_mapping', uid, cbor.dumps(msg))
     else:
-        alerts = await connection.hget(f'{redis_prefix}_uid_alert_mapping', uid)
-    if alerts is not None:
-        response = cbor.loads(alerts)
-    else:
+        alerts = cbor.loads(await connection.hget(f'{redis_prefix}_uid_alert_mapping', uid))
+    if not alerts:
         response = 'NO ALERTS YET'
-    encrypted_message = await packer_unpacker_cache[pubkey_bytes][0](response)
-    return web.Response(text=base64.b64encode(encrypted_message).decode())
+    else:
+        response = alerts
+    encoded_encrypted_message = await wrap_message(pubkey_bytes, response, connection, base64=True)
+    return web.Response(body=encoded_encrypted_message, content_type='application/base64')
 
 
 def create_app(loop):
@@ -167,7 +134,6 @@ def create_app(loop):
         app['packer_unpacker_cache'] = {}
 
     app = web.Application()
-    #app.router.add_get('/ws', init_ws)
     app.router.add_post('/alerts', set_alerts)
     app.router.add_post('/latest', get_latest)
     app.router.add_post('/register', register_node)

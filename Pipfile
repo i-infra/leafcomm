@@ -19,3 +19,7 @@ scipy = "*"
 
 [scripts]
 lint = "bash scripts/lint"
+
+[dev-packages]
+pyqrcode = "*"
+aioconsole = "*"
