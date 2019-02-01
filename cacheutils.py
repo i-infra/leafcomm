@@ -33,7 +33,6 @@ Learn more about `caching algorithms on Wikipedia
 # TODO: TimedLRI
 # TODO: support 0 max_size?
 
-
 import heapq
 import weakref
 import itertools
@@ -43,13 +42,16 @@ from operator import attrgetter
 try:
     from threading import RLock
 except Exception:
+
     class RLock(object):
         'Dummy reentrant lock for builds without threads'
+
         def __enter__(self):
             pass
 
         def __exit__(self, exctype, excinst, exctb):
             pass
+
 
 try:
     from boltons.typeutils import make_sentinel
@@ -66,7 +68,7 @@ except NameError:
     xrange = range
     unicode, str, bytes, basestring = str, bytes, bytes, (str, bytes)
 
-PREV, NEXT, KEY, VALUE = range(4)   # names for the link fields
+PREV, NEXT, KEY, VALUE = range(4)  # names for the link fields
 DEFAULT_MAX_SIZE = 128
 
 
@@ -104,8 +106,8 @@ class LRU(dict):
     Other than the size-limiting caching behavior and statistics,
     ``LRU`` acts like its parent class, the built-in Python :class:`dict`.
     """
-    def __init__(self, max_size=DEFAULT_MAX_SIZE, values=None,
-                 on_miss=None):
+
+    def __init__(self, max_size=DEFAULT_MAX_SIZE, values=None, on_miss=None):
         if max_size <= 0:
             raise ValueError('expected max_size > 0, not %r' % max_size)
         self.hit_count = self.miss_count = self.soft_miss_count = 0
@@ -114,8 +116,7 @@ class LRU(dict):
         self._init_ll()
 
         if on_miss is not None and not callable(on_miss):
-            raise TypeError('expected on_miss to be a callable'
-                            ' (or None), not %r' % on_miss)
+            raise TypeError('expected on_miss to be a callable' ' (or None), not %r' % on_miss)
         self.on_miss = on_miss
 
         if values:
@@ -309,8 +310,7 @@ class LRU(dict):
     def __repr__(self):
         cn = self.__class__.__name__
         val_map = super(LRU, self).__repr__()
-        return ('%s(max_size=%r, on_miss=%r, values=%s)'
-                % (cn, self.max_size, self.on_miss, val_map))
+        return ('%s(max_size=%r, on_miss=%r, values=%s)' % (cn, self.max_size, self.on_miss, val_map))
 
 
 class LRI(dict):
@@ -335,11 +335,11 @@ class LRI(dict):
     >>> cap_cache.hit_count, cap_cache.miss_count, cap_cache.soft_miss_count
     (3, 1, 1)
     """
+
     # In order to support delitem andn .pop() setitem will need to
     # popleft until it finds a key still in the cache. or, only
     # support popitems and raise an error on pop.
-    def __init__(self, max_size=DEFAULT_MAX_SIZE, values=None,
-                 on_miss=None):
+    def __init__(self, max_size=DEFAULT_MAX_SIZE, values=None, on_miss=None):
         super(LRI, self).__init__()
         self.hit_count = self.miss_count = self.soft_miss_count = 0
         self.max_size = max_size
@@ -410,6 +410,7 @@ class LRI(dict):
 ### Cached decorator
 # Key-making technique adapted from Python 3.4's functools
 
+
 class _HashedKey(list):
     """The _HashedKey guarantees that hash() will be called no more than once
     per cached function invocation.
@@ -427,9 +428,7 @@ class _HashedKey(list):
         return '%s(%s)' % (self.__class__.__name__, list.__repr__(self))
 
 
-def make_cache_key(args, kwargs, typed=False,
-                   kwarg_mark=_KWARG_MARK,
-                   fasttypes=frozenset([int, str, frozenset, type(None)])):
+def make_cache_key(args, kwargs, typed=False, kwarg_mark=_KWARG_MARK, fasttypes=frozenset([int, str, frozenset, type(None)])):
     """Make a generic key from a function's positional and keyword
     arguments, suitable for use in caches. Arguments within *args* and
     *kwargs* must be `hashable`_. If *typed* is ``True``, ``3`` and
@@ -463,6 +462,7 @@ def make_cache_key(args, kwargs, typed=False,
         return key[0]
     return _HashedKey(key)
 
+
 # for backwards compatibility in case someone was importing it
 _make_cache_key = make_cache_key
 
@@ -471,18 +471,18 @@ class CachedFunction(object):
     """This type is used by :func:`cached`, below. Instances of this
     class are used to wrap functions in caching logic.
     """
+
     def __init__(self, func, cache, scoped=True, typed=False, key=None):
         self.func = func
         if callable(cache):
             self.get_cache = cache
-        elif not (callable(getattr(cache, '__getitem__', None))
-                  and callable(getattr(cache, '__setitem__', None))):
-            raise TypeError('expected cache to be a dict-like object,'
-                            ' or callable returning a dict-like object, not %r'
-                            % cache)
+        elif not (callable(getattr(cache, '__getitem__', None)) and callable(getattr(cache, '__setitem__', None))):
+            raise TypeError('expected cache to be a dict-like object,' ' or callable returning a dict-like object, not %r' % cache)
         else:
+
             def _get_cache():
                 return cache
+
             self.get_cache = _get_cache
         self.scoped = scoped
         self.typed = typed
@@ -500,8 +500,7 @@ class CachedFunction(object):
     def __repr__(self):
         cn = self.__class__.__name__
         if self.typed or not self.scoped:
-            return ("%s(func=%r, scoped=%r, typed=%r)"
-                    % (cn, self.func, self.scoped, self.typed))
+            return ("%s(func=%r, scoped=%r, typed=%r)" % (cn, self.func, self.scoped, self.typed))
         return "%s(func=%r)" % (cn, self.func)
 
 
@@ -509,6 +508,7 @@ class CachedMethod(object):
     """Similar to :class:`CachedFunction`, this type is used by
     :func:`cachedmethod` to wrap methods in caching logic.
     """
+
     def __init__(self, func, cache, scoped=True, typed=False, key=None):
         self.func = func
         self.__isabstractmethod__ = getattr(func, '__isabstractmethod__', False)
@@ -516,14 +516,13 @@ class CachedMethod(object):
             self.get_cache = attrgetter(cache)
         elif callable(cache):
             self.get_cache = cache
-        elif not (callable(getattr(cache, '__getitem__', None))
-                  and callable(getattr(cache, '__setitem__', None))):
-            raise TypeError('expected cache to be an attribute name,'
-                            ' dict-like object, or callable returning'
-                            ' a dict-like object, not %r' % cache)
+        elif not (callable(getattr(cache, '__getitem__', None)) and callable(getattr(cache, '__setitem__', None))):
+            raise TypeError('expected cache to be an attribute name,' ' dict-like object, or callable returning' ' a dict-like object, not %r' % cache)
         else:
+
             def _get_cache(obj):
                 return cache
+
             self.get_cache = _get_cache
         self.scoped = scoped
         self.typed = typed
@@ -534,8 +533,7 @@ class CachedMethod(object):
         if obj is None:
             return self
         cls = self.__class__
-        ret = cls(self.func, self.get_cache, typed=self.typed,
-                  scoped=self.scoped, key=self.key_func)
+        ret = cls(self.func, self.get_cache, typed=self.typed, scoped=self.scoped, key=self.key_func)
         ret.bound_to = obj
         return ret
 
@@ -548,7 +546,7 @@ class CachedMethod(object):
             ret = cache[key]
         except KeyError:
             if self.bound_to is not None:
-                args = (self.bound_to,) + args
+                args = (self.bound_to, ) + args
             ret = cache[key] = self.func(*args, **kwargs)
         return ret
 
@@ -556,7 +554,7 @@ class CachedMethod(object):
         cn = self.__class__.__name__
         args = (cn, self.func, self.scoped, self.typed)
         if self.bound_to is not None:
-            args += (self.bound_to,)
+            args += (self.bound_to, )
             return ('<%s func=%r scoped=%r typed=%r bound_to=%r>' % args)
         return ("%s(func=%r, scoped=%r, typed=%r)" % args)
 
@@ -594,8 +592,10 @@ def cached(cache, scoped=True, typed=False, key=None):
     .. _hashable: https://docs.python.org/2/glossary.html#term-hashable
 
     """
+
     def cached_func_decorator(func):
         return CachedFunction(func, cache, scoped=scoped, typed=typed, key=key)
+
     return cached_func_decorator
 
 
@@ -636,8 +636,10 @@ def cachedmethod(cache, scoped=True, typed=False, key=None):
     1
 
     """
+
     def cached_method_decorator(func):
         return CachedMethod(func, cache, scoped=scoped, typed=typed, key=key)
+
     return cached_method_decorator
 
 
@@ -651,6 +653,7 @@ class cachedproperty(object):
     allows the cache to be cleared with :func:`delattr`, or through
     manipulating the object's ``__dict__``.
     """
+
     def __init__(self, func):
         self.__doc__ = getattr(func, '__doc__')
         self.__isabstractmethod__ = getattr(func, '__isabstractmethod__', False)
@@ -710,11 +713,11 @@ class ThresholdCounter(object):
     and initial implementation.
 
     """
+
     # TODO: hit_count/miss_count?
     def __init__(self, threshold=0.001):
         if not 0 < threshold < 1:
-            raise ValueError('expected threshold between 0 and 1, not: %r'
-                             % threshold)
+            raise ValueError('expected threshold between 0 and 1, not: %r' % threshold)
 
         self.total = 0
         self._count_map = {}
@@ -739,8 +742,7 @@ class ThresholdCounter(object):
             self._count_map[key] = [1, self._cur_bucket - 1]
 
         if self.total % self._thresh_count == 0:
-            self._count_map = dict([(k, v) for k, v in self._count_map.items()
-                                    if sum(v) > self._cur_bucket])
+            self._count_map = dict([(k, v) for k, v in self._count_map.items() if sum(v) > self._cur_bucket])
             self._cur_bucket += 1
         return
 
@@ -850,6 +852,7 @@ class MinIDMap(object):
 
     Based on https://gist.github.com/kurtbrose/25b48114de216a5e55df
     """
+
     def __init__(self):
         self.mapping = weakref.WeakKeyDictionary()
         self.ref_map = {}

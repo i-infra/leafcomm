@@ -33,6 +33,7 @@ def enforce_types(callable):
         def wrapper(*args, **kwargs):
             check_types(*args, **kwargs)
             return func(*args, **kwargs)
+
         return wrapper
 
     if inspect.isclass(callable):

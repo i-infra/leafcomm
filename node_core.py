@@ -20,13 +20,13 @@ from node_comms import *
 import handlebars
 import _constants
 
-
 sampling_rate = 256_000
 L, H, E = 0, 1, 2
 logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
 FilterFunc = typing.Callable[[numpy.ndarray], numpy.ndarray]
 Deciles = typing.Dict[int, typing.Tuple[int, int]]
+
 
 @dataclasses.dataclass
 class Packet:
@@ -35,6 +35,7 @@ class Packet:
     deciles: dict
     raw: list
     ulid: str
+
 
 @dataclasses.dataclass
 class Pulses:
@@ -62,17 +63,22 @@ try:
         b = b.astype('float32')
         a = a.astype('float32')
         return b, a
+
     signal_filter_coefficients = dict(zip(('b', 'a'), build_butter_filter(2000, sampling_rate, order=4)))
+
     def lowpass(xs):
         return lfilter(signal_filter_coefficients['b'], signal_filter_coefficients['a'], xs)
+
     filters = [brickwall, lowpass]
 except:
     filters = [brickwall]
 
 
 def compress(in_):
-    return dict(size=in_.size, dtype=in_.dtype.str,
-            data=blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
+    return dict(
+        size=in_.size,
+        dtype=in_.dtype.str,
+        data=blosc.compress_ptr(in_.__array_interface__['data'][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname='lz4'))
 
 
 def decompress(size: int, dtype: str, data: bytes, **kwargs) -> numpy.ndarray:
@@ -113,7 +119,8 @@ async def analog_to_block() -> typing.Awaitable[None]:
     center_frequency = 433900000.0
     # primary sampling state machine
     # samples background amplitude, accumulate and transfer sample chunks significantly above ambient power
-    async for byte_samples in sdr.stream(block_size, format='bytes'):
+    async for byte_samples in sdr.stream(
+        block_size, format='bytes'):
         last_tick = float(await connection.hget(f'{redis_prefix}_function_call_ticks', handlebars.get_function_name()) or b'0')
         await tick(connection)
         now_tick = float(await connection.hget(f'{redis_prefix}_function_call_ticks', handlebars.get_function_name()) or b'0')
@@ -158,13 +165,13 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     logger.debug(
                         'flushing: %s' % {
                             'start_timestamp': start_of_transmission_timestamp,
-                            'duration_ms': int((end_of_transmission_timestamp - start_of_transmission_timestamp)*1000),
+                            'duration_ms': int((end_of_transmission_timestamp - start_of_transmission_timestamp) * 1000),
                             'center_freq': center_frequency,
                             'block_count': len(blocks_accumulated),
                             'message power': int(numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated)),
                             'avg': int(historical_background_power),
                             'lifetime_blocks': sampled_background_block_count,
-                            'iteration_duration': time.time()-now_tick,
+                            'iteration_duration': time.time() - now_tick,
                             'ulid': ulid
                         })
                     await connection.hincrby(f'{redis_prefix}_found_maybe_good_transmission_at_frequency', center_frequency, 1)
@@ -326,7 +333,7 @@ def silver_sensor_decoder(packet: Packet) -> typing.Optional[Sample]:
         if temp > 1000:
             temp %= 1000
             temp += 100
-        temp = ((temp / 10) - 32) * 5/9
+        temp = ((temp / 10) - 32) * 5 / 9
         success = True
     elif len(packet.bits) == 36:
         n = depacketize(packet, [4, 8, 2, 1, 1, 12, 8], SilverSensor_36b)
@@ -340,7 +347,7 @@ def silver_sensor_decoder(packet: Packet) -> typing.Optional[Sample]:
     if success:
         if len(packet.bits) == 42:
             open('42_bits', 'a').write(''.join([{True: '1', False: '0'}[bit] for bit in packet.bits]) + '\n')
-        return Sample(n.uid+1024+n.channel, temp, humidity, n.channel, n.low_battery, n.button_pushed, packet.ulid)
+        return Sample(n.uid + 1024 + n.channel, temp, humidity, n.channel, n.low_battery, n.button_pushed, packet.ulid)
 
 
 def pulses_to_sample(pulses: Pulses) -> Sample:
@@ -406,6 +413,7 @@ async def register_session_box(aiohttp_client_session):
     logger.info(f'http successfully used to init uplink {status}')
     return (uid, packer, unpacker)
 
+
 async def sample_to_upstream(loop=None):
     """ accumulates frames of latest values and periodically encrypts and sends to upstream via udp
      * sets up encrypted session over HTTP, ensures encryption key registered for node UID
@@ -433,7 +441,7 @@ async def sample_to_upstream(loop=None):
         now = time.time()
         if intervals_till_next_verification == 0:
             first_seen, most_recently_seen = await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, heartbeat_url, uid)
-            since_last_seen = int(now-most_recently_seen)
+            since_last_seen = int(now - most_recently_seen)
             if since_last_seen > 5 * max_update_interval:
                 logger.error('backend reports 5x longer since last update than expected, terminating uplink')
                 raise TimeoutError
@@ -475,7 +483,7 @@ async def band_monitor(connection=None):
                 failed = 0
             else:
                 failed = int(failed)
-            channel_stats['stats'][int(freq)]=[int(count), failed]
+            channel_stats['stats'][int(freq)] = [int(count), failed]
         logger.info(json.dumps(channel_stats))
         await asyncio.sleep(60)
 
@@ -507,7 +515,7 @@ async def watchdog(connection=None, threshold=600, key='sproutwave_function_call
         ticks = await get_ticks(connection, key=key)
         process_stats = dict(stats={}, timestamp=int(now))
         for name, timestamp in ticks.items():
-            process_stats['stats'][name.decode()] = int(now-timestamp)
+            process_stats['stats'][name.decode()] = int(now - timestamp)
         logger.info(json.dumps(process_stats))
         if any([(now - timestamp) > timeout for timestamp in ticks.values()]):
             await connection.delete(key)

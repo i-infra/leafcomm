@@ -10,14 +10,17 @@ SIGNUP_URL = f'{URL_BASE}/signup'
 LOGIN_URL = f'{URL_BASE}/login'
 LATEST_URL = f'{URL_BASE}/latest'
 
+
 async def test_signup():
     packer, unpacker = await get_packer_unpacker(_constants.upstream_pubkey_bytes)
     human_name, uid = get_hardware_uid()
     password_hash = nacl.hash.sha512('test password'.encode()).decode()
-    signup_message = dict(zip('email name nodeSecret passwordHash passwordHint phone'.split(),
+    signup_message = dict(
+        zip('email name nodeSecret passwordHash passwordHint phone'.split(),
             f'tester@test.com test_name {uid.hex()} {password_hash} test_password 8675309'.split()))
     print('signup ->', signup_message)
     print('signup <-', await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, SIGNUP_URL, signup_message))
+
 
 async def test_latest():
     packer, unpacker = await get_packer_unpacker(_constants.upstream_pubkey_bytes)

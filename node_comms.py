@@ -21,8 +21,10 @@ redis_prefix = "sproutwave"
 
 data_dir = os.path.expanduser('~/.sproutwave/')
 
+
 def init_redis(preface=''):
     return handlebars.init_redis(data_dir + preface + 'sproutwave.sock')
+
 
 import cacheutils
 
@@ -59,6 +61,7 @@ async def pseudosub(connection, channel, timeout=360):
         if res and res.value:
             yield res
 
+
 class SerializedReading:
     def __init__(self, ulid, cbor_bytes):
         if isinstance(ulid, bytes):
@@ -71,6 +74,7 @@ class SerializedReading:
         else:
             self.value = None
         self.timestamp = ulid2.get_ulid_timestamp(self.ulid)
+
 
 async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):
     channel, data_tag = await connection.brpop(f'{redis_prefix}_{channel}', timeout)
@@ -96,23 +100,26 @@ async def check_counter(counter_name, redis_connection, current_value):
     else:
         raise Exception(f"{counter_name.hex()}: got {current_value} expected at least {int(last_counter)+1}")
 
+
 packer_unpacker_cache = cacheutils.LRI(128)
 
-async def unwrap_message(message_bytes, redis_connection = None):
+
+async def unwrap_message(message_bytes, redis_connection=None):
     """ high level abstraction accepting a byte sequence and returning the pubkey and message.
     will attempt to reuse existing crypto intermediate values. """
     global packer_unpacker_cache
     redis_connection = redis_connection or await init_redis('proxy')
     pubkey_bytes = message_bytes[1:PUBKEY_SIZE + 1]
     if pubkey_bytes not in packer_unpacker_cache.keys():
-        packer, unpacker = await get_packer_unpacker(pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes, redis_connection = redis_connection)
+        packer, unpacker = await get_packer_unpacker(pubkey_bytes, local_privkey_bytes=_constants.upstream_privkey_bytes, redis_connection=redis_connection)
         packer_unpacker_cache[pubkey_bytes] = (packer, unpacker)
     else:
         packer, unpacker = packer_unpacker_cache[pubkey_bytes]
     unpacked_message = await unpacker(message_bytes)
     return pubkey_bytes, unpacked_message
 
-async def wrap_message(pubkey_bytes, message, redis_connection = None, b64=False):
+
+async def wrap_message(pubkey_bytes, message, redis_connection=None, b64=False):
     global packer_unpacker_cache
     encrypted_message = await packer_unpacker_cache[pubkey_bytes][0](message)
     if b64:
@@ -120,7 +127,7 @@ async def wrap_message(pubkey_bytes, message, redis_connection = None, b64=False
     return encrypted_message
 
 
-async def get_packer_unpacker(peer_pubkey_bytes, local_privkey_bytes=None, redis_connection = None):
+async def get_packer_unpacker(peer_pubkey_bytes, local_privkey_bytes=None, redis_connection=None):
     # TODO: compression
     redis_connection = redis_connection or await init_redis()
     peer_public_key = nacl.public.PublicKey(peer_pubkey_bytes)
@@ -131,6 +138,7 @@ async def get_packer_unpacker(peer_pubkey_bytes, local_privkey_bytes=None, redis
     session_box = nacl.public.Box(local_privkey, peer_public_key)
     local_pubkey_bytes = local_privkey.public_key.encode()
     counter_name = local_pubkey_bytes + peer_pubkey_bytes
+
     async def packer(message):
         nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
         counter = await get_next_counter(counter_name, redis_connection)
@@ -157,4 +165,3 @@ async def make_wrapped_http_request(aiohttp_client_session, packer, unpacker, ur
         if resp.content_type == 'application/base64':
             encrypted_response = base64.b64decode(encrypted_response)
         return await unpacker(encrypted_response)
-

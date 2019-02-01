@@ -13,6 +13,7 @@ import sys
 
 logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
+
 class ProxyDatagramProtocol(asyncio.DatagramProtocol):
     def __init__(self, loop, connection):
         self.loop = loop
@@ -25,6 +26,7 @@ class ProxyDatagramProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         self.loop.create_task(pseudopub(self.connection, ['udp_inbound'], None, data))
 
+
 async def register_node(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
@@ -33,6 +35,7 @@ async def register_node(request):
     await connection.hset(f'{redis_prefix}_node_earliest_timestamp_pubkey', pubkey_bytes.hex(), time.time())
     encrypted_message = await wrap_message(pubkey_bytes, b'\x01', connection)
     return web.Response(body=encrypted_message)
+
 
 async def redistribute(loop=None):
     redis_connection = await init_redis("proxy")
@@ -44,6 +47,7 @@ async def redistribute(loop=None):
         await redis_connection.hset(f'{redis_prefix}_latest_value_frame', uid, cbor.dumps(update_msg))
         await redis_connection.hset(f'{redis_prefix}_latest_message_timestamp', uid, now)
         await pseudopub(redis_connection, [f'updates_{uid.decode()}'], now, update_msg)
+
 
 async def check_received(request):
     connection = request.app['redis']
@@ -58,6 +62,7 @@ async def check_received(request):
     msg = (earliest_timestamp, timestamp_latest_msg)
     encrypted_message = await packer_unpacker_cache[pubkey_bytes][0](msg)
     return web.Response(body=encrypted_message)
+
 
 async def start_authenticated_session(request):
     connection = request.app['redis']
@@ -106,6 +111,7 @@ async def get_latest(request):
         response = 'NO DATA YET'
     encoded_encrypted_message = await wrap_message(pubkey_bytes, response, connection, b64=True)
     return web.Response(body=encoded_encrypted_message, content_type='application/base64')
+
 
 async def set_alerts(request):
     connection = request.app['redis']

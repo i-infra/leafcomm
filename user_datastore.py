@@ -7,18 +7,22 @@ from enum import Enum
 
 from enforce_types import enforce_types
 
+
 class Status(int, Enum):
     WRONG_PASSWORD = 0
     NO_SUCH_USER = 1
     SUCCESS = 2
 
+
 class AlertMechanism(int, Enum):
     EMAIL = 0
     SMS = 1
 
+
 class Direction(int, Enum):
     RISING = +1
     FALLING = -1
+
 
 @enforce_types
 @dataclass
@@ -30,6 +34,7 @@ class Alert:
     method: AlertMechanism
     info: str
     minimum_duration: int
+
 
 @enforce_types
 @dataclass
