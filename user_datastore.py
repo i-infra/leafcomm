@@ -42,7 +42,7 @@ class User:
     name: str
     email: str
     phone: str
-    password_hash: str
+    password_hash: bytes
     password_meta: str
     node_id: str
     alerts: str

@@ -14,10 +14,8 @@ LATEST_URL = f'{URL_BASE}/latest'
 async def test_signup():
     packer, unpacker = await get_packer_unpacker(_constants.upstream_pubkey_bytes)
     human_name, uid = get_hardware_uid()
-    password_hash = nacl.hash.sha512('test password'.encode()).decode()
-    signup_message = dict(
-        zip('email name nodeSecret passwordHash passwordHint phone'.split(),
-            f'tester@test.com test_name {uid.hex()} {password_hash} test_password 8675309'.split()))
+    password_hash = nacl.hash.sha512('test password'.encode(), encoder=nacl.encoding.RawEncoder)
+    signup_message = dict(email='tester3@test.com', name='test_name', nodeSecret=uid.hex(), passwordHash=password_hash, passwordHint='test_password', phone='8675309')
     print('signup ->', signup_message)
     print('signup <-', await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, SIGNUP_URL, signup_message))
 
@@ -25,8 +23,8 @@ async def test_signup():
 async def test_latest():
     packer, unpacker = await get_packer_unpacker(_constants.upstream_pubkey_bytes)
     human_name, uid = get_hardware_uid()
-    password_hash = nacl.hash.sha512('test password'.encode()).decode()
-    login_message = dict(zip('email passwordHash'.split(), f'tester@test.com {password_hash}'.split()))
+    password_hash = nacl.hash.sha512('test password'.encode(), encoder=nacl.encoding.RawEncoder)
+    login_message = dict(email='tester3@test.com', passwordHash=password_hash)
     print('login <-', await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, LOGIN_URL, login_message))
     print('latest <-', await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, LATEST_URL, ''))
 
