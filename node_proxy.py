@@ -77,6 +77,7 @@ async def start_authenticated_session(request):
         if user_signin_status == user_datastore.Status.NO_SUCH_USER:
             user_signin_status = users_db.add_user(
                 msg.get('name'), msg.get('email'), msg.get('phone'), msg.get('passwordHash'), msg.get('passwordHint'), msg.get('nodeSecret'))
+            _, user_info = users_db.check_user(msg.get('email'), msg.get('passwordHash'))
         if user_info is not None:
             serialized_user = dataclasses.asdict(user_info)
         else:
