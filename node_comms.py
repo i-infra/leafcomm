@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import cbor
 import nacl
@@ -12,6 +13,8 @@ import aiohttp
 import handlebars
 
 import _constants
+
+logger = handlebars.get_logger(__name__, debug='--debug' in sys.argv)
 
 PUBKEY_SIZE = nacl.public.PublicKey.SIZE
 COUNTER_WIDTH = 4
@@ -140,6 +143,7 @@ async def get_packer_unpacker(peer_pubkey_bytes, local_privkey_bytes=None, redis
     counter_name = local_pubkey_bytes + peer_pubkey_bytes
 
     async def packer(message):
+        logger.debug(str(message))
         nonce = nacl.utils.random(nacl.public.Box.NONCE_SIZE)
         counter = await get_next_counter(counter_name, redis_connection)
         counter_bytes = counter.to_bytes(COUNTER_WIDTH, 'little')
@@ -152,7 +156,9 @@ async def get_packer_unpacker(peer_pubkey_bytes, local_privkey_bytes=None, redis
         plaintext = session_box.decrypt(message[1 + PUBKEY_SIZE:])
         counter = int.from_bytes(plaintext[:COUNTER_WIDTH], 'little')
         if await check_counter(counter_name, redis_connection, counter):
-            return cbor.loads(plaintext[COUNTER_WIDTH:])
+            raw_msg = cbor.loads(plaintext[COUNTER_WIDTH:])
+            logger.debug(str(raw_msg))
+            return raw_msg
 
     return packer, unpacker
 
