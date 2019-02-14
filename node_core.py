@@ -299,7 +299,7 @@ class SilverSensor_36b:
     rh: int
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(unsafe_hash=True)
 class Sample:
     uid: int
     temperature: float
@@ -356,10 +356,18 @@ def pulses_to_sample(pulses: Pulses) -> Sample:
     for packet in demodulator(pulses):
         logger.debug(f'got: {len(packet.bits)} {printer(packet.bits)}')
         packet_possibilities += [silver_sensor_decoder(packet)]
-    for possibility in packet_possibilities:
+    for possibility in set(packet_possibilities):
         if packet_possibilities.count(possibility) > 1:
-            return possibility
+            yield possibility
 
+async def successfully_decoded(connection, reading, decoded):
+    ulid, timestamp = reading.ulid, reading.timestamp
+    await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.degc, float(decoded.temperature)])
+    await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.rh, float(decoded.humidity)])
+    await connection.sadd(f'{redis_prefix}_success_timestamps', timestamp)
+    await connection.hincrby(f'{redis_prefix}_sensor_uuid_counts', decoded.uid, 1)
+    await connection.hset(f'{redis_prefix}_sensor_uuid_timestamps', decoded.uid, timestamp)
+    await connection.expire(f'{data_tag_label}{ulid}', 120)
 
 async def block_to_sample() -> typing.Awaitable[None]:
     """ worker function which:
@@ -370,24 +378,19 @@ async def block_to_sample() -> typing.Awaitable[None]:
      * updates expirations of analog data block """
     connection = await init_redis()
     async for reading in pseudosub(connection, 'transmissions'):
-        ulid, timestamp, decoded = reading.ulid, reading.timestamp, None
+        decoded = None
         for filter_func in filters:
             pulses = block_to_pulses(reading, filter_func)
             if len(pulses.sequence) > 10:
-                decoded = pulses_to_sample(pulses)
+                for decoded in pulses_to_sample(pulses):
+                    logger.info(f'decoded {decoded} with {filter_func.__name__}')
+                    if decoded:
+                        await successfully_decoded(connection, reading, decoded)
                 if decoded:
                     break
-            logger.info(f'decoded {decoded} with {filter_func.__name__}')
-        if decoded:
-            await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.degc, float(decoded.temperature)])
-            await pseudopub(connection, ['datastore_channel', 'upstream_channel'], None, [timestamp, decoded.uid, tsd.rh, float(decoded.humidity)])
-            await connection.sadd(f'{redis_prefix}_success_timestamps', timestamp)
-            await connection.hincrby(f'{redis_prefix}_sensor_uuid_counts', decoded.uid, 1)
-            await connection.hset(f'{redis_prefix}_sensor_uuid_timestamps', decoded.uid, timestamp)
-            await connection.expire(f'{data_tag_label}{ulid}', 120)
-        else:
-            await connection.expire(f'{data_tag_label}{ulid}', 3600)
-            await connection.sadd(f'{redis_prefix}_fail_timestamps', timestamp)
+        if not decoded:
+            await connection.expire(f'{data_tag_label}{reading.ulid}', 3600)
+            await connection.sadd(f'{redis_prefix}_fail_timestamps', reading.timestamp)
 
 
 def get_hardware_uid() -> (str, bytes):
