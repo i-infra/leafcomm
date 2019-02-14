@@ -33,9 +33,10 @@ class Alert:
     temp: float
     direction: Direction
     method: AlertMechanism
-    info: str
+    user_contact_info: str
     minimum_duration: int
     sensor_uids: typing.List[int]
+    last_updated_timestamp: float
 
 
 @enforce_types
