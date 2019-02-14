@@ -117,7 +117,7 @@ async def get_latest(request):
 async def set_alerts(request):
     connection = request.app['redis']
     posted_bytes = await request.read()
-    pubkey_bytes, msg = await unwrap_message(posted_bytes, connection, packer_unpacker_cache)
+    pubkey_bytes, msg = await unwrap_message(posted_bytes, connection)
     uid = await connection.hget(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex())
     if msg:
         await connection.hset(f'{redis_prefix}_uid_alert_mapping', uid, cbor.dumps(msg))
