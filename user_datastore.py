@@ -2,8 +2,9 @@ from dataclasses import dataclass, asdict
 import sqlite3 as sql
 import time
 import tempfile
-import uuid
+import typing
 from enum import Enum
+import nacl.pwhash
 
 from enforce_types import enforce_types
 
@@ -34,6 +35,7 @@ class Alert:
     method: AlertMechanism
     info: str
     minimum_duration: int
+    sensor_uids: typing.List[int]
 
 
 @enforce_types
@@ -63,15 +65,15 @@ class UserDatabase(object):
         self.conn.commit()
         self.cursor = self.conn.cursor()
 
-    def check_user(self, email, password_hash):
+    def check_user(self, email, client_password_hash):
         selector = 'SELECT * FROM users WHERE email=?'
         users = self.cursor.execute(selector, (email, )).fetchall()
         if users:
             name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[0]
-            if any([x != y for (x, y) in zip(password_hash_stored, password_hash)]):
-                return Status.WRONG_PASSWORD, None
-            else:
+            if nacl.pwhash.verify(password_hash_stored, client_password_hash):
                 return Status.SUCCESS, User(*users[0])
+            else:
+                return Status.WRONG_PASSWORD, None
         return Status.NO_SUCH_USER, None
 
     def get_user_settings(self, email, password_hash):
@@ -96,8 +98,9 @@ class UserDatabase(object):
         raise NotImplemented
         # localization, units, etc
 
-    def add_user(self, name, email, phone, password_hash, password_meta, node_id, alert_defaults='', app_settings=''):
+    def add_user(self, name, email, phone, first_password_hash, password_meta, node_id, alert_defaults='', app_settings=''):
         inserter = "INSERT INTO users VALUES(?, ?, ?, ?, ?, ?, '', '')"
+        password_hash = nacl.pwhash.str(first_password_hash)
         data = (name, email, phone, password_hash, password_meta, node_id)
         self.cursor.executemany(inserter, [data])
         self.conn.commit()
