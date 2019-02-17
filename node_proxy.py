@@ -119,15 +119,19 @@ async def set_alerts(request):
     posted_bytes = await request.read()
     pubkey_bytes, msg = await unwrap_message(posted_bytes, connection)
     uid = await connection.hget(f'{redis_prefix}_user_pubkey_uid_mapping', pubkey_bytes.hex())
-    if msg:
+    alerts = None
+    if isinstance(msg, list):
         await connection.hset(f'{redis_prefix}_uid_alert_mapping', uid, cbor.dumps(msg))
-    else:
-        alerts = cbor.loads(await connection.hget(f'{redis_prefix}_uid_alert_mapping', uid))
+        alerts = msg
+    elif msg == None:
+        maybe_alerts = await connection.hget(f'{redis_prefix}_uid_alert_mapping', uid)
+        if maybe_alerts:
+            alerts = cbor.loads(maybe_alerts)
     if not alerts:
-        response = 'NO ALERTS YET'
+        response = 'NO ALERTS YET: got {str(msg)}'
     else:
         response = alerts
-    encoded_encrypted_message = await wrap_message(pubkey_bytes, response, connection, base64=True)
+    encoded_encrypted_message = await wrap_message(pubkey_bytes, response, connection, b64=True)
     return web.Response(body=encoded_encrypted_message, content_type='application/base64')
 
 
