@@ -121,9 +121,9 @@ async def analog_to_block() -> typing.Awaitable[None]:
     # samples background amplitude, accumulate and transfer sample chunks significantly above ambient power
     async for byte_samples in sdr.stream(
         block_size, format='bytes'):
-        last_tick = float(await connection.hget(f'{redis_prefix}_function_call_ticks', handlebars.get_function_name()) or b'0')
+        last_tick = float(await connection.hget(f'{redis_prefix}_function_call_ticks', handlebars.get_function_name()) or 0)
         await tick(connection)
-        now_tick = float(await connection.hget(f'{redis_prefix}_function_call_ticks', handlebars.get_function_name()) or b'0')
+        now_tick = float(await connection.hget(f'{redis_prefix}_function_call_ticks', handlebars.get_function_name()) or 0)
         complex_samples = packed_bytes_to_iq(byte_samples)
         # calculate cum and avg power
         block_power = numpy.sum(numpy.abs(complex_samples))
@@ -439,7 +439,7 @@ async def sample_to_upstream(loop=None):
     async for reading in pseudosub(connection, 'upstream_channel'):
         timestamp = reading.timestamp
         reading = reading.value
-        last_seen = float(await connection.hget(f'{redis_prefix}_sensor_uuid_timestamps', reading[1]) or '0')
+        last_seen = float(await connection.hget(f'{redis_prefix}_sensor_uuid_timestamps', reading[1]) or 0)
         samples[reading[1] + 4096 * reading[2]] = reading
         now = time.time()
         if intervals_till_next_verification == 0:
