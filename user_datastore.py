@@ -72,7 +72,10 @@ class UserDatabase(object):
         if users:
             name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[0]
             if nacl.pwhash.verify(password_hash_stored, client_password_hash):
-                return Status.SUCCESS, User(*users[0])
+                current_user = User(*users[0])
+                current_user.password_meta = ''
+                current_user.password_hash = b''
+                return Status.SUCCESS, current_user
             else:
                 return Status.WRONG_PASSWORD, None
         return Status.NO_SUCH_USER, None
