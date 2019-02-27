@@ -399,11 +399,13 @@ def get_hardware_uid() -> (str, bytes):
     import nacl.encoding
     import glob
     import colourful_vegetables
-    hashed = nacl.hash.sha256(open(glob.glob('/sys/block/mmcblk*/device/cid')[0], 'rb').read(), encoder=nacl.encoding.RawEncoder)[0:8]
-    colour = colourful_vegetables.colours[hashed[-1] >> 4]
-    veggy = colourful_vegetables.vegetables[hashed[-1] & 15]
+    raw_sd_card_id = bytes.fromhex(open(glob.glob('/sys/block/mmcblk*/device/cid')[0], 'r').read())
+    raw_hashed_id = nacl.hash.sha256(raw_sd_card_id, encoder=nacl.encoding.RawEncoder)
+    colour = colourful_vegetables.colours[raw_hashed_id[0] >> 4]
+    veggy = colourful_vegetables.vegetables[raw_hashed_id[0] & 15]
+    node_id = AbbreviatedBase32Encoder.encode(raw_hashed_id)
     human_name = '%s %s' % (colour, veggy)
-    return (human_name, hashed)
+    return (human_name, node_id)
 
 
 async def register_session_box(aiohttp_client_session):
