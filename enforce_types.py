@@ -26,7 +26,7 @@ def enforce_types(callable):
                     # case of typing.Union[…] or typing.ClassVar[…]
                     actual_type = type_hint.__args__
                 if not isinstance(value, actual_type):
-                    raise TypeError('Unexpected type for \'{}\' (expected {} but found {})'.format(name, type_hint, type(value)))
+                    raise TypeError("Unexpected type for '{}' (expected {} but found {})".format(name, type_hint, type(value)))
 
     def decorate(func):
         @wraps(func)

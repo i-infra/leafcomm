@@ -44,7 +44,7 @@ try:
 except Exception:
 
     class RLock(object):
-        'Dummy reentrant lock for builds without threads'
+        "Dummy reentrant lock for builds without threads"
 
         def __enter__(self):
             pass
@@ -55,8 +55,9 @@ except Exception:
 
 try:
     from boltons.typeutils import make_sentinel
-    _MISSING = make_sentinel(var_name='_MISSING')
-    _KWARG_MARK = make_sentinel(var_name='_KWARG_MARK')
+
+    _MISSING = make_sentinel(var_name="_MISSING")
+    _KWARG_MARK = make_sentinel(var_name="_KWARG_MARK")
 except ImportError:
     _MISSING = object()
     _KWARG_MARK = object()
@@ -109,14 +110,14 @@ class LRU(dict):
 
     def __init__(self, max_size=DEFAULT_MAX_SIZE, values=None, on_miss=None):
         if max_size <= 0:
-            raise ValueError('expected max_size > 0, not %r' % max_size)
+            raise ValueError("expected max_size > 0, not %r" % max_size)
         self.hit_count = self.miss_count = self.soft_miss_count = 0
         self.max_size = max_size
         self._lock = RLock()
         self._init_ll()
 
         if on_miss is not None and not callable(on_miss):
-            raise TypeError('expected on_miss to be a callable' ' (or None), not %r' % on_miss)
+            raise TypeError("expected on_miss to be a callable" " (or None), not %r" % on_miss)
         self.on_miss = on_miss
 
         if values:
@@ -141,13 +142,13 @@ class LRU(dict):
 
     def _print_ll(self):
         link = self._anchor
-        print('***')
+        print("***")
         while True:
             print(link[KEY], link[VALUE])
             link = link[NEXT]
             if link is self._anchor:
                 break
-        print('***')
+        print("***")
         return
 
     def _get_link_and_move_to_front_of_ll(self, key):
@@ -284,7 +285,7 @@ class LRU(dict):
             if E is self:
                 return
             setitem = self.__setitem__
-            if callable(getattr(E, 'keys', None)):
+            if callable(getattr(E, "keys", None)):
                 for k in E.keys():
                     setitem(k, E[k])
             else:
@@ -310,7 +311,7 @@ class LRU(dict):
     def __repr__(self):
         cn = self.__class__.__name__
         val_map = super(LRU, self).__repr__()
-        return ('%s(max_size=%r, on_miss=%r, values=%s)' % (cn, self.max_size, self.on_miss, val_map))
+        return "%s(max_size=%r, on_miss=%r, values=%s)" % (cn, self.max_size, self.on_miss, val_map)
 
 
 class LRI(dict):
@@ -362,7 +363,7 @@ class LRI(dict):
         if E is self:
             return
         setitem = self.__setitem__
-        if callable(getattr(E, 'keys', None)):
+        if callable(getattr(E, "keys", None)):
             for k in E.keys():
                 setitem(k, E[k])
         else:
@@ -415,7 +416,8 @@ class _HashedKey(list):
     """The _HashedKey guarantees that hash() will be called no more than once
     per cached function invocation.
     """
-    __slots__ = 'hash_value'
+
+    __slots__ = "hash_value"
 
     def __init__(self, key):
         self[:] = key
@@ -425,7 +427,7 @@ class _HashedKey(list):
         return self.hash_value
 
     def __repr__(self):
-        return '%s(%s)' % (self.__class__.__name__, list.__repr__(self))
+        return "%s(%s)" % (self.__class__.__name__, list.__repr__(self))
 
 
 def make_cache_key(args, kwargs, typed=False, kwarg_mark=_KWARG_MARK, fasttypes=frozenset([int, str, frozenset, type(None)])):
@@ -476,8 +478,8 @@ class CachedFunction(object):
         self.func = func
         if callable(cache):
             self.get_cache = cache
-        elif not (callable(getattr(cache, '__getitem__', None)) and callable(getattr(cache, '__setitem__', None))):
-            raise TypeError('expected cache to be a dict-like object,' ' or callable returning a dict-like object, not %r' % cache)
+        elif not (callable(getattr(cache, "__getitem__", None)) and callable(getattr(cache, "__setitem__", None))):
+            raise TypeError("expected cache to be a dict-like object," " or callable returning a dict-like object, not %r" % cache)
         else:
 
             def _get_cache():
@@ -500,7 +502,7 @@ class CachedFunction(object):
     def __repr__(self):
         cn = self.__class__.__name__
         if self.typed or not self.scoped:
-            return ("%s(func=%r, scoped=%r, typed=%r)" % (cn, self.func, self.scoped, self.typed))
+            return "%s(func=%r, scoped=%r, typed=%r)" % (cn, self.func, self.scoped, self.typed)
         return "%s(func=%r)" % (cn, self.func)
 
 
@@ -511,13 +513,13 @@ class CachedMethod(object):
 
     def __init__(self, func, cache, scoped=True, typed=False, key=None):
         self.func = func
-        self.__isabstractmethod__ = getattr(func, '__isabstractmethod__', False)
+        self.__isabstractmethod__ = getattr(func, "__isabstractmethod__", False)
         if isinstance(cache, basestring):
             self.get_cache = attrgetter(cache)
         elif callable(cache):
             self.get_cache = cache
-        elif not (callable(getattr(cache, '__getitem__', None)) and callable(getattr(cache, '__setitem__', None))):
-            raise TypeError('expected cache to be an attribute name,' ' dict-like object, or callable returning' ' a dict-like object, not %r' % cache)
+        elif not (callable(getattr(cache, "__getitem__", None)) and callable(getattr(cache, "__setitem__", None))):
+            raise TypeError("expected cache to be an attribute name," " dict-like object, or callable returning" " a dict-like object, not %r" % cache)
         else:
 
             def _get_cache(obj):
@@ -546,7 +548,7 @@ class CachedMethod(object):
             ret = cache[key]
         except KeyError:
             if self.bound_to is not None:
-                args = (self.bound_to, ) + args
+                args = (self.bound_to,) + args
             ret = cache[key] = self.func(*args, **kwargs)
         return ret
 
@@ -554,9 +556,9 @@ class CachedMethod(object):
         cn = self.__class__.__name__
         args = (cn, self.func, self.scoped, self.typed)
         if self.bound_to is not None:
-            args += (self.bound_to, )
-            return ('<%s func=%r scoped=%r typed=%r bound_to=%r>' % args)
-        return ("%s(func=%r, scoped=%r, typed=%r)" % args)
+            args += (self.bound_to,)
+            return "<%s func=%r scoped=%r typed=%r bound_to=%r>" % args
+        return "%s(func=%r, scoped=%r, typed=%r)" % args
 
 
 def cached(cache, scoped=True, typed=False, key=None):
@@ -655,8 +657,8 @@ class cachedproperty(object):
     """
 
     def __init__(self, func):
-        self.__doc__ = getattr(func, '__doc__')
-        self.__isabstractmethod__ = getattr(func, '__isabstractmethod__', False)
+        self.__doc__ = getattr(func, "__doc__")
+        self.__isabstractmethod__ = getattr(func, "__isabstractmethod__", False)
         self.func = func
 
     def __get__(self, obj, objtype=None):
@@ -667,7 +669,7 @@ class cachedproperty(object):
 
     def __repr__(self):
         cn = self.__class__.__name__
-        return '<%s func=%s>' % (cn, self.func)
+        return "<%s func=%s>" % (cn, self.func)
 
 
 class ThresholdCounter(object):
@@ -717,7 +719,7 @@ class ThresholdCounter(object):
     # TODO: hit_count/miss_count?
     def __init__(self, threshold=0.001):
         if not 0 < threshold < 1:
-            raise ValueError('expected threshold between 0 and 1, not: %r' % threshold)
+            raise ValueError("expected threshold between 0 and 1, not: %r" % threshold)
 
         self.total = 0
         self._count_map = {}
@@ -833,7 +835,7 @@ class ThresholdCounter(object):
         to integer counts.
         """
         if iterable is not None:
-            if callable(getattr(iterable, 'iteritems', None)):
+            if callable(getattr(iterable, "iteritems", None)):
                 for key, count in iterable.iteritems():
                     for i in xrange(count):
                         self.add(key)

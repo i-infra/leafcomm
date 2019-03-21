@@ -12,23 +12,23 @@ import math
 import pycha.line
 import pycha.scatter
 
-sensor_colors = ['#70B336', '#7CEAFF', '#CFA8FF', '#FFABCB', '#661479']
-opacity = '80'
+sensor_colors = ["#70B336", "#7CEAFF", "#CFA8FF", "#FFABCB", "#661479"]
+opacity = "80"
 sensor_colors = [x + opacity for x in sensor_colors]
 datastore = tsd.TimeSeriesDatastore()
 
 
-def get_datasets(start=0, stop=-1, parameter='degc'):
+def get_datasets(start=0, stop=-1, parameter="degc"):
     sensors = {}
     samples = datastore.get_measurements(start, stop)
     for sample in samples:
-        sample['sensor_uid'] = 'sensor' + str(sample['sensor_uid'])
-        if sample['units'] == parameter:
-            value = (sample['timestamp'] - start, sample['value'] * 9 / 5 + 32)
-            if sample['sensor_uid'] not in sensors.keys():
-                sensors[sample['sensor_uid']] = [value]
+        sample["sensor_uid"] = "sensor" + str(sample["sensor_uid"])
+        if sample["units"] == parameter:
+            value = (sample["timestamp"] - start, sample["value"] * 9 / 5 + 32)
+            if sample["sensor_uid"] not in sensors.keys():
+                sensors[sample["sensor_uid"]] = [value]
             else:
-                sensors[sample['sensor_uid']].append(value)
+                sensors[sample["sensor_uid"]].append(value)
     for sensor in [x for x in sensors.items()]:
         if len(sensor[1]) < 10:
             sensors.pop(sensor[0])
@@ -37,7 +37,7 @@ def get_datasets(start=0, stop=-1, parameter='degc'):
 
 def plotter(filename, datasets, width, height):
     if len(datasets) == 0:
-        print('no datasets for', filename)
+        print("no datasets for", filename)
         return None
     surface = cairo.SVGSurface(filename, width, height)
     longest = max([y[1][-1][0] for y in datasets])
@@ -64,38 +64,23 @@ def plotter(filename, datasets, width, height):
         time_label = "hrs ago"
     tick_count_int = decimal.Decimal(tick_count).quantize(decimal.Decimal(1), rounding=decimal.ROUND_HALF_EVEN)
     options = {
-        'axis': {
-            'x': {
-                'ticks': [
+        "axis": {
+            "x": {
+                "ticks": [
                     dict(v=((tick_count - i) * longest / tick_count), label=str(fractions.Fraction(i * offset)) + time_label)
-                    for i in range(int(tick_count_int)) if i > 0
+                    for i in range(int(tick_count_int))
+                    if i > 0
                 ]
             },
-            'y': {
-                'tickCount': 4,
-                'range': (0, 100),
-                'label': 'Deg F',
-            },
-            'tickFontSize': 14,
-            'legendFontSize': 14,
-            'labelFontSize': 28
+            "y": {"tickCount": 4, "range": (0, 100), "label": "Deg F"},
+            "tickFontSize": 14,
+            "legendFontSize": 14,
+            "labelFontSize": 28,
         },
-        'background': {
-            'color': '#ffffffff',
-            'lineColor': '#444444'
-        },
-        'colorScheme': {
-            'name': 'fixed',
-            'args': {
-                'colors': sensor_colors
-            },
-        },
-        'legend': {},
-        'stroke': {
-            'shadow': False,
-            'color': '#aaaaaaff',
-            'width': 6
-        }
+        "background": {"color": "#ffffffff", "lineColor": "#444444"},
+        "colorScheme": {"name": "fixed", "args": {"colors": sensor_colors}},
+        "legend": {},
+        "stroke": {"shadow": False, "color": "#aaaaaaff", "width": 6},
     }
     chart = pycha.scatter.ScatterplotChart(surface, options)
     chart.addDataset(datasets)
@@ -111,7 +96,7 @@ def plot_temperatures(hours=1, width=1024, height=768):
 
 hour_scales = [1, 2, 4, 12, 24, 7 * 24]
 
-if __name__ in ['__main__', '__console__']:
+if __name__ in ["__main__", "__console__"]:
     while True:
         for hours in hour_scales:
             plot_temperatures(hours)

@@ -53,36 +53,36 @@ class User:
 
 
 class UserDatabase(object):
-    def __init__(self, db_name='user_config.db'):
-        if db_name[0] != '/':
-            temp_log_dir = tempfile.mkdtemp(prefix='user-', dir='/tmp')
-            db_name = temp_log_dir + '/' + db_name
+    def __init__(self, db_name="user_config.db"):
+        if db_name[0] != "/":
+            temp_log_dir = tempfile.mkdtemp(prefix="user-", dir="/tmp")
+            db_name = temp_log_dir + "/" + db_name
         self.db_name = db_name
         self.conn = sql.connect(db_name)
-        init_users = 'CREATE TABLE IF NOT EXISTS users (Name TEXT, Email TEXT, Phone TEXT, PasswordHash BLOB, PasswordMeta BLOB, NodeID TEXT, Alerts BLOB, AppSettings BLOB)'
+        init_users = "CREATE TABLE IF NOT EXISTS users (Name TEXT, Email TEXT, Phone TEXT, PasswordHash BLOB, PasswordMeta BLOB, NodeID TEXT, Alerts BLOB, AppSettings BLOB)"
         self.conn.execute(init_users)
-        create_index = 'CREATE INDEX IF NOT EXISTS users_index on users (Email ASC)'
+        create_index = "CREATE INDEX IF NOT EXISTS users_index on users (Email ASC)"
         self.conn.execute(create_index)
         self.conn.commit()
         self.cursor = self.conn.cursor()
 
     def check_user(self, email, client_password_hash):
-        selector = 'SELECT * FROM users WHERE email=?'
-        users = self.cursor.execute(selector, (email, )).fetchall()
+        selector = "SELECT * FROM users WHERE email=?"
+        users = self.cursor.execute(selector, (email,)).fetchall()
         if users:
             name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[0]
             if nacl.pwhash.verify(password_hash_stored, client_password_hash):
                 current_user = User(*users[0])
-                current_user.password_meta = ''
-                current_user.password_hash = b''
+                current_user.password_meta = ""
+                current_user.password_hash = b""
                 return Status.SUCCESS, current_user
             else:
                 return Status.WRONG_PASSWORD, None
         return Status.NO_SUCH_USER, None
 
     def get_user_settings(self, email, password_hash):
-        selector = 'SELECT * FROM users WHERE email=?'
-        user = User(*self.cursor.execute(selector, (email, )).fetchone())
+        selector = "SELECT * FROM users WHERE email=?"
+        user = User(*self.cursor.execute(selector, (email,)).fetchone())
         if all([x == y for (x, y) in zip(user.password_hash, password_hash)]):
             return user
 
@@ -102,7 +102,7 @@ class UserDatabase(object):
         raise NotImplemented
         # localization, units, etc
 
-    def add_user(self, name, email, phone, first_password_hash, password_meta, node_id, alert_defaults='', app_settings=''):
+    def add_user(self, name, email, phone, first_password_hash, password_meta, node_id, alert_defaults="", app_settings=""):
         inserter = "INSERT INTO users VALUES(?, ?, ?, ?, ?, ?, '', '')"
         password_hash = nacl.pwhash.str(first_password_hash)
         data = (name, email, phone, password_hash, password_meta, node_id)
