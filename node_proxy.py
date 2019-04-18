@@ -30,8 +30,8 @@ class ProxyDatagramProtocol(asyncio.DatagramProtocol):
 async def register_node(request):
     connection = request.app["redis"]
     posted_bytes = await request.read()
-    pubkey_bytes, uid_bytes = await unwrap_message(posted_bytes, connection)
-    await connection.hset(f"{redis_prefix}_node_pubkey_uid_mapping", pubkey_bytes.hex(), uid_bytes.hex())
+    pubkey_bytes, uid = await unwrap_message(posted_bytes, connection)
+    await connection.hset(f"{redis_prefix}_node_pubkey_uid_mapping", pubkey_bytes.hex(), uid)
     await connection.hset(f"{redis_prefix}_node_earliest_timestamp_pubkey", pubkey_bytes.hex(), time.time())
     encrypted_message = await wrap_message(pubkey_bytes, b"\x01", connection)
     return web.Response(body=encrypted_message)
@@ -52,11 +52,10 @@ async def redistribute(loop=None):
 async def check_received(request):
     connection = request.app["redis"]
     posted_bytes = await request.read()
-    pubkey_bytes, uid_bytes = await unwrap_message(posted_bytes, connection)
+    pubkey_bytes, uid = await unwrap_message(posted_bytes, connection)
     uid_hex = (await connection.hget(f"{redis_prefix}_node_pubkey_uid_mapping", pubkey_bytes.hex()) or b"").decode()
-    assert uid_hex == uid_bytes.hex()
     earliest_timestamp_pubkey = await connection.hget(f"{redis_prefix}_node_earliest_timestamp_pubkey", pubkey_bytes.hex())
-    latest_msg_timestamp = await connection.hget(f"{redis_prefix}_latest_message_timestamp", uid_hex)
+    latest_msg_timestamp = await connection.hget(f"{redis_prefix}_latest_message_timestamp", uid)
     earliest_timestamp = float(earliest_timestamp_pubkey or 0)
     timestamp_latest_msg = float(latest_msg_timestamp or 0)
     msg = (earliest_timestamp, timestamp_latest_msg)
@@ -96,6 +95,7 @@ async def start_authenticated_session(request):
         msg = ("login", str(user_signin_status), serialized_user)
     if user_signin_status == user_datastore.Status.SUCCESS:
         await connection.hset(f"{redis_prefix}_user_pubkey_uid_mapping", pubkey_bytes.hex(), user_info.node_id)
+        await connection.hset(f"{redis_prefix}_user_pubkey_email_mapping", pubkey_bytes.hex(), user_info.email)
         await connection.hset(f"{redis_prefix}_user_timestamp_authed_pubkey", pubkey_bytes.hex(), time.time())
     encoded_encrypted_message = await wrap_message(pubkey_bytes, msg, connection, b64=True)
     return web.Response(body=encoded_encrypted_message, content_type="application/base64")
@@ -119,17 +119,22 @@ async def set_alerts(request):
     connection = request.app["redis"]
     posted_bytes = await request.read()
     pubkey_bytes, msg = await unwrap_message(posted_bytes, connection)
+    logger.info(f"set_alerts: {msg}")
     uid = await connection.hget(f"{redis_prefix}_user_pubkey_uid_mapping", pubkey_bytes.hex())
     alerts = None
-    if isinstance(msg, list):
-        await connection.hset(f"{redis_prefix}_uid_alert_mapping", uid, cbor.dumps(msg))
+    if msg:
+        serialized_alerts = cbor.dumps(msg)
+        await connection.hset(f"{redis_prefix}_uid_alert_mapping", uid, serialized_alerts)
+        maybe_email = await connection.hget(f"{redis_prefix}_user_pubkey_email_mapping". pubkey_bytes.hex())
+        if maybe_email and alerts:
+            request.app["users_db"].update_alerts(maybe_email, serialized_alerts)
         alerts = msg
     elif msg == None:
         maybe_alerts = await connection.hget(f"{redis_prefix}_uid_alert_mapping", uid)
         if maybe_alerts:
             alerts = cbor.loads(maybe_alerts)
     if not alerts:
-        response = "NO ALERTS YET: got {str(msg)}"
+        response = f"NO ALERTS YET: got {str(msg)}"
     else:
         response = alerts
     encoded_encrypted_message = await wrap_message(pubkey_bytes, response, connection, b64=True)
