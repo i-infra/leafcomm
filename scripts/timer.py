@@ -1,16 +1,20 @@
 import timeit
-import bottleneck as bn
+
 import numpy as np
+
+import bottleneck as bn
 import numba as nu
-import numexpr3 as ne3
 import numexpr as ne
+import numexpr3 as ne3
 
 
 def nuabs(x):
     y = np.zeros(x.shape, dtype="float32")
     shape = x.shape[0]
 
-    @nu.jit("float32[:](complex64[:], float32[:])", nopython=True, nogil=True, cache=True)
+    @nu.jit(
+        "float32[:](complex64[:], float32[:])", nopython=True, nogil=True, cache=True
+    )
     def nuabs_(x, y):
         for i in range(x.shape[0]):
             y[i] = np.abs(x[i])

@@ -1,10 +1,11 @@
 import sys
+import time
+
+import cbor
+import node_core
 
 sys.path.append("./")
-import node_core
-import cbor
 
-import time
 
 for fname in sys.argv[1::]:
     if fname == "-":

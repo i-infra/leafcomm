@@ -1,20 +1,19 @@
+import asyncio
+import base64
 import os
 import sys
 import time
+
+import _constants
+import aiohttp
+import aiohttp.web
+import cacheutils
 import cbor
+import handlebars
 import nacl
 import nacl.hash
 import nacl.public
 import ulid2
-import asyncio
-
-import base64
-import aiohttp
-import aiohttp.web
-
-import handlebars
-
-import _constants
 
 logger = handlebars.get_logger(__name__, debug="--debug" in sys.argv)
 
@@ -31,7 +30,6 @@ def init_redis(preface=""):
     return handlebars.init_redis(data_dir + preface + "sproutwave.sock")
 
 
-import cacheutils
 
 
 async def tick(connection, function_name_depth=1, key=f"{redis_prefix}_function_call_ticks"):

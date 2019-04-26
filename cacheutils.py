@@ -34,8 +34,8 @@ Learn more about `caching algorithms on Wikipedia
 # TODO: support 0 max_size?
 
 import heapq
-import weakref
 import itertools
+import weakref
 from collections import deque
 from operator import attrgetter
 
@@ -117,7 +117,9 @@ class LRU(dict):
         self._init_ll()
 
         if on_miss is not None and not callable(on_miss):
-            raise TypeError("expected on_miss to be a callable" " (or None), not %r" % on_miss)
+            raise TypeError(
+                "expected on_miss to be a callable" " (or None), not %r" % on_miss
+            )
         self.on_miss = on_miss
 
         if values:
@@ -311,7 +313,12 @@ class LRU(dict):
     def __repr__(self):
         cn = self.__class__.__name__
         val_map = super(LRU, self).__repr__()
-        return "%s(max_size=%r, on_miss=%r, values=%s)" % (cn, self.max_size, self.on_miss, val_map)
+        return "%s(max_size=%r, on_miss=%r, values=%s)" % (
+            cn,
+            self.max_size,
+            self.on_miss,
+            val_map,
+        )
 
 
 class LRI(dict):
@@ -430,7 +437,13 @@ class _HashedKey(list):
         return "%s(%s)" % (self.__class__.__name__, list.__repr__(self))
 
 
-def make_cache_key(args, kwargs, typed=False, kwarg_mark=_KWARG_MARK, fasttypes=frozenset([int, str, frozenset, type(None)])):
+def make_cache_key(
+    args,
+    kwargs,
+    typed=False,
+    kwarg_mark=_KWARG_MARK,
+    fasttypes=frozenset([int, str, frozenset, type(None)]),
+):
     """Make a generic key from a function's positional and keyword
     arguments, suitable for use in caches. Arguments within *args* and
     *kwargs* must be `hashable`_. If *typed* is ``True``, ``3`` and
@@ -478,8 +491,14 @@ class CachedFunction(object):
         self.func = func
         if callable(cache):
             self.get_cache = cache
-        elif not (callable(getattr(cache, "__getitem__", None)) and callable(getattr(cache, "__setitem__", None))):
-            raise TypeError("expected cache to be a dict-like object," " or callable returning a dict-like object, not %r" % cache)
+        elif not (
+            callable(getattr(cache, "__getitem__", None))
+            and callable(getattr(cache, "__setitem__", None))
+        ):
+            raise TypeError(
+                "expected cache to be a dict-like object,"
+                " or callable returning a dict-like object, not %r" % cache
+            )
         else:
 
             def _get_cache():
@@ -502,7 +521,12 @@ class CachedFunction(object):
     def __repr__(self):
         cn = self.__class__.__name__
         if self.typed or not self.scoped:
-            return "%s(func=%r, scoped=%r, typed=%r)" % (cn, self.func, self.scoped, self.typed)
+            return "%s(func=%r, scoped=%r, typed=%r)" % (
+                cn,
+                self.func,
+                self.scoped,
+                self.typed,
+            )
         return "%s(func=%r)" % (cn, self.func)
 
 
@@ -518,8 +542,15 @@ class CachedMethod(object):
             self.get_cache = attrgetter(cache)
         elif callable(cache):
             self.get_cache = cache
-        elif not (callable(getattr(cache, "__getitem__", None)) and callable(getattr(cache, "__setitem__", None))):
-            raise TypeError("expected cache to be an attribute name," " dict-like object, or callable returning" " a dict-like object, not %r" % cache)
+        elif not (
+            callable(getattr(cache, "__getitem__", None))
+            and callable(getattr(cache, "__setitem__", None))
+        ):
+            raise TypeError(
+                "expected cache to be an attribute name,"
+                " dict-like object, or callable returning"
+                " a dict-like object, not %r" % cache
+            )
         else:
 
             def _get_cache(obj):
@@ -535,7 +566,13 @@ class CachedMethod(object):
         if obj is None:
             return self
         cls = self.__class__
-        ret = cls(self.func, self.get_cache, typed=self.typed, scoped=self.scoped, key=self.key_func)
+        ret = cls(
+            self.func,
+            self.get_cache,
+            typed=self.typed,
+            scoped=self.scoped,
+            key=self.key_func,
+        )
         ret.bound_to = obj
         return ret
 
@@ -744,7 +781,13 @@ class ThresholdCounter(object):
             self._count_map[key] = [1, self._cur_bucket - 1]
 
         if self.total % self._thresh_count == 0:
-            self._count_map = dict([(k, v) for k, v in self._count_map.items() if sum(v) > self._cur_bucket])
+            self._count_map = dict(
+                [
+                    (k, v)
+                    for k, v in self._count_map.items()
+                    if sum(v) > self._cur_bucket
+                ]
+            )
             self._cur_bucket += 1
         return
 

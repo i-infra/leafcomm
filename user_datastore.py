@@ -1,11 +1,11 @@
-from dataclasses import dataclass, asdict
 import sqlite3 as sql
-import time
 import tempfile
+import time
 import typing
+from dataclasses import asdict, dataclass
 from enum import Enum
-import nacl.pwhash
 
+import nacl.pwhash
 from enforce_types import enforce_types
 
 
@@ -70,7 +70,9 @@ class UserDatabase(object):
         selector = "SELECT * FROM users WHERE email=?"
         users = self.cursor.execute(selector, (email,)).fetchall()
         if users:
-            name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[0]
+            name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[
+                0
+            ]
             if nacl.pwhash.verify(password_hash_stored, client_password_hash):
                 current_user = User(*users[0])
                 current_user.password_meta = ""
@@ -102,7 +104,17 @@ class UserDatabase(object):
         raise NotImplemented
         # localization, units, etc
 
-    def add_user(self, name, email, phone, first_password_hash, password_meta, node_id, alert_defaults="", app_settings=""):
+    def add_user(
+        self,
+        name,
+        email,
+        phone,
+        first_password_hash,
+        password_meta,
+        node_id,
+        alert_defaults="",
+        app_settings="",
+    ):
         inserter = "INSERT INTO users VALUES(?, ?, ?, ?, ?, ?, '', '')"
         password_hash = nacl.pwhash.str(first_password_hash)
         data = (name, email, phone, password_hash, password_meta, node_id)

@@ -1,16 +1,13 @@
-import time
-import tsd
-
+import decimal
+import fractions
+import math
 import sys
+import time
 
 import cairocffi as cairo
-import fractions
-
-import decimal
-import math
-
 import pycha.line
 import pycha.scatter
+import tsd
 
 sensor_colors = ["#70B336", "#7CEAFF", "#CFA8FF", "#FFABCB", "#661479"]
 opacity = "80"
@@ -62,12 +59,17 @@ def plotter(filename, datasets, width, height):
     else:
         offset = 1
         time_label = "hrs ago"
-    tick_count_int = decimal.Decimal(tick_count).quantize(decimal.Decimal(1), rounding=decimal.ROUND_HALF_EVEN)
+    tick_count_int = decimal.Decimal(tick_count).quantize(
+        decimal.Decimal(1), rounding=decimal.ROUND_HALF_EVEN
+    )
     options = {
         "axis": {
             "x": {
                 "ticks": [
-                    dict(v=((tick_count - i) * longest / tick_count), label=str(fractions.Fraction(i * offset)) + time_label)
+                    dict(
+                        v=((tick_count - i) * longest / tick_count),
+                        label=str(fractions.Fraction(i * offset)) + time_label,
+                    )
                     for i in range(int(tick_count_int))
                     if i > 0
                 ]

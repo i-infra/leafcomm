@@ -1,24 +1,23 @@
+import asyncio
+import dataclasses
+import itertools
+import json
 import os
+import pathlib
+import pprint
+import statistics
 import sys
 import time
-import json
 import typing
-import pprint
-import asyncio
-import pathlib
-import itertools
-import statistics
-import dataclasses
 
-import blosc
 import numpy
-import bottleneck
-import ts_datastore as tsd
 
-from node_comms import *
-
-import handlebars
 import _constants
+import blosc
+import bottleneck
+import handlebars
+import ts_datastore as tsd
+from node_comms import *
 
 sampling_rate = 256_000
 L, H, E = 0, 1, 2
@@ -64,10 +63,14 @@ try:
         a = a.astype("float32")
         return b, a
 
-    signal_filter_coefficients = dict(zip(("b", "a"), build_butter_filter(2000, sampling_rate, order=4)))
+    signal_filter_coefficients = dict(
+        zip(("b", "a"), build_butter_filter(2000, sampling_rate, order=4))
+    )
 
     def lowpass(xs):
-        return lfilter(signal_filter_coefficients["b"], signal_filter_coefficients["a"], xs)
+        return lfilter(
+            signal_filter_coefficients["b"], signal_filter_coefficients["a"], xs
+        )
 
     filters = [brickwall, lowpass]
 except:
@@ -78,7 +81,14 @@ def compress(in_):
     return dict(
         size=in_.size,
         dtype=in_.dtype.str,
-        data=blosc.compress_ptr(in_.__array_interface__["data"][0], in_.size, in_.dtype.itemsize, clevel=1, shuffle=blosc.BITSHUFFLE, cname="lz4"),
+        data=blosc.compress_ptr(
+            in_.__array_interface__["data"][0],
+            in_.size,
+            in_.dtype.itemsize,
+            clevel=1,
+            shuffle=blosc.BITSHUFFLE,
+            cname="lz4",
+        ),
     )
 
 
@@ -117,14 +127,29 @@ async def analog_to_block() -> typing.Awaitable[None]:
     block_size = 512 * 64
     samp_size = block_size // 2
     # initial state
-    accumulating_blocks, blocks_accumulated, historical_power, sampled_background_block_count = False, [], 0, 0
+    accumulating_blocks, blocks_accumulated, historical_power, sampled_background_block_count = (
+        False,
+        [],
+        0,
+        0,
+    )
     center_frequency = 433900000.0
     # primary sampling state machine
     # samples background amplitude, accumulate and transfer sample chunks significantly above ambient power
     async for byte_samples in sdr.stream(block_size, format="bytes"):
-        last_tick = float(await connection.hget(f"{redis_prefix}_function_call_ticks", handlebars.get_function_name()) or 0)
+        last_tick = float(
+            await connection.hget(
+                f"{redis_prefix}_function_call_ticks", handlebars.get_function_name()
+            )
+            or 0
+        )
         await tick(connection)
-        now_tick = float(await connection.hget(f"{redis_prefix}_function_call_ticks", handlebars.get_function_name()) or 0)
+        now_tick = float(
+            await connection.hget(
+                f"{redis_prefix}_function_call_ticks", handlebars.get_function_name()
+            )
+            or 0
+        )
         complex_samples = packed_bytes_to_iq(byte_samples)
         # calculate cum and avg power
         block_power = numpy.sum(numpy.abs(complex_samples))
@@ -138,15 +163,22 @@ async def analog_to_block() -> typing.Awaitable[None]:
         if sampled_background_block_count % 1000 == 1 and accumulating_blocks is False:
             # reset threshold every 10k blocks
             if sampled_background_block_count > 10000:
-                logger.info(f"resetting accumulator to {int(historical_background_power)}")
-                historical_power, sampled_background_block_count = historical_background_power, 1
+                logger.info(
+                    f"resetting accumulator to {int(historical_background_power)}"
+                )
+                historical_power, sampled_background_block_count = (
+                    historical_background_power,
+                    1,
+                )
             center_frequency = get_new_center()
             sdr.set_center_freq(center_frequency)
             center_frequency = sdr.get_center_freq()
             logger.info("center frequency: %d" % center_frequency)
         if block_power > historical_background_power * 1.02:
             if accumulating_blocks is False:
-                logger.info(f"STARTING ACCUMULATION with {block_power} compared to {historical_background_power}")
+                logger.info(
+                    f"STARTING ACCUMULATION with {block_power} compared to {historical_background_power}"
+                )
                 start_of_transmission_timestamp = time.time()
             historical_power += (block_power - historical_background_power) / 100.0
             accumulating_blocks = True
@@ -162,24 +194,46 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     sampled_message = numpy.concatenate(blocks_accumulated)
                     info = compress(sampled_message)
                     info["center_frequency"] = center_frequency
-                    ulid = await pseudopub(connection, "transmissions", timestamp=start_of_transmission_timestamp, reading=info)
+                    ulid = await pseudopub(
+                        connection,
+                        "transmissions",
+                        timestamp=start_of_transmission_timestamp,
+                        reading=info,
+                    )
                     logger.debug(
                         "flushing: %s"
                         % {
                             "start_timestamp": start_of_transmission_timestamp,
-                            "duration_ms": int((end_of_transmission_timestamp - start_of_transmission_timestamp) * 1000),
+                            "duration_ms": int(
+                                (
+                                    end_of_transmission_timestamp
+                                    - start_of_transmission_timestamp
+                                )
+                                * 1000
+                            ),
                             "center_freq": center_frequency,
                             "block_count": len(blocks_accumulated),
-                            "message power": int(numpy.sum(numpy.abs(sampled_message)) / len(blocks_accumulated)),
+                            "message power": int(
+                                numpy.sum(numpy.abs(sampled_message))
+                                / len(blocks_accumulated)
+                            ),
                             "avg": int(historical_background_power),
                             "lifetime_blocks": sampled_background_block_count,
                             "iteration_duration": time.time() - now_tick,
                             "ulid": ulid,
                         }
                     )
-                    await connection.hincrby(f"{redis_prefix}_found_maybe_good_transmission_at_frequency", center_frequency, 1)
+                    await connection.hincrby(
+                        f"{redis_prefix}_found_maybe_good_transmission_at_frequency",
+                        center_frequency,
+                        1,
+                    )
                 else:
-                    await connection.hincrby(f"{redis_prefix}_found_bad_transmission_at_frequency", center_frequency, 1)
+                    await connection.hincrby(
+                        f"{redis_prefix}_found_bad_transmission_at_frequency",
+                        center_frequency,
+                        1,
+                    )
                 blocks_accumulated, accumulating_blocks = [], False
                 gc.collect()
     await sdr.stop()
@@ -187,7 +241,9 @@ async def analog_to_block() -> typing.Awaitable[None]:
     return None
 
 
-def block_to_pulses(compressed_iq_reading: SerializedReading, smoother: FilterFunc = brickwall) -> Pulses:
+def block_to_pulses(
+    compressed_iq_reading: SerializedReading, smoother: FilterFunc = brickwall
+) -> Pulses:
     """ takes a compressed block of analog samples, takes magnitude, amplitude-thresholds and returns pulses """
     beep_samples = decompress(**compressed_iq_reading.value)
     beep_absolute = numpy.abs(beep_samples)
@@ -205,7 +261,9 @@ def pulses_to_deciles(pulses: Pulses) -> typing.Optional[Deciles]:
     if len(pulses.sequence) < 10:
         return deciles
     for value in values:
-        counts = numpy.sort(pulses.sequence[numpy.where(pulses.sequence.T[1] == value)].T[0])
+        counts = numpy.sort(
+            pulses.sequence[numpy.where(pulses.sequence.T[1] == value)].T[0]
+        )
         tenth = len(counts) // 10
         if not tenth:
             return deciles
@@ -223,7 +281,9 @@ def pulses_to_breaks(pulses: Pulses, deciles: Deciles) -> typing.List[int]:
     if 0 not in deciles.keys() or 1 not in deciles.keys():
         return []
     cutoff = min(deciles[0][0], deciles[1][0]) * 9
-    breaks = numpy.logical_and(pulses.sequence.T[0] > cutoff, pulses.sequence.T[1] == L).nonzero()[0]
+    breaks = numpy.logical_and(
+        pulses.sequence.T[0] > cutoff, pulses.sequence.T[1] == L
+    ).nonzero()[0]
     break_deltas = numpy.diff(breaks)
     # heuristic - "packet" "repeated" with fewer than 5 separations or more than 50 breaks is no good
     if len(breaks) > 50 or len(breaks) < 5:
@@ -238,7 +298,13 @@ def pulses_to_breaks(pulses: Pulses, deciles: Deciles) -> typing.List[int]:
         if len(expected_breaks) < 2:
             return []
         tolerance = d_mode // 10
-        breaks = [x for x, bd in zip(breaks, break_deltas) if any([abs(x - y) < tolerance for y in expected_breaks]) or bd == d_mode or bd < 5]
+        breaks = [
+            x
+            for x, bd in zip(breaks, break_deltas)
+            if any([abs(x - y) < tolerance for y in expected_breaks])
+            or bd == d_mode
+            or bd < 5
+        ]
     logger.debug(f"using breaks {breaks}")
     return breaks
 
@@ -313,12 +379,17 @@ class Sample:
     ulid: str
 
 
-def depacketize(packet: Packet, bitwidths: typing.List[int], output_class: dataclasses.dataclass):
+def depacketize(
+    packet: Packet, bitwidths: typing.List[int], output_class: dataclasses.dataclass
+):
     """ accept a Packet, list of field bitwidths, and output datatype. do the segmenting and binary conversion. """
     if bitwidths[0] != 0:
         bitwidths = [0] + bitwidths
     field_positions = [x for x in itertools.accumulate(bitwidths)]
-    results = [handlebars.debinary(packet.bits[x:y]) for x, y in zip(field_positions, field_positions[1:])]
+    results = [
+        handlebars.debinary(packet.bits[x:y])
+        for x, y in zip(field_positions, field_positions[1:])
+    ]
     return output_class(*results)
 
 
@@ -349,8 +420,18 @@ def silver_sensor_decoder(packet: Packet) -> typing.Optional[Sample]:
             success = True
     if success:
         if len(packet.bits) == 42:
-            open("42_bits", "a").write("".join([{True: "1", False: "0"}[bit] for bit in packet.bits]) + "\n")
-        return Sample(n.uid + 1024 + n.channel, temp, humidity, n.channel, n.low_battery, n.button_pushed, packet.ulid)
+            open("42_bits", "a").write(
+                "".join([{True: "1", False: "0"}[bit] for bit in packet.bits]) + "\n"
+            )
+        return Sample(
+            n.uid + 1024 + n.channel,
+            temp,
+            humidity,
+            n.channel,
+            n.low_battery,
+            n.button_pushed,
+            packet.ulid,
+        )
 
 
 def pulses_to_sample(pulses: Pulses) -> Sample:
@@ -366,11 +447,23 @@ def pulses_to_sample(pulses: Pulses) -> Sample:
 
 async def successfully_decoded(connection, reading, decoded):
     ulid, timestamp = reading.ulid, reading.timestamp
-    await pseudopub(connection, ["datastore_channel", "upstream_channel"], None, [timestamp, decoded.uid, tsd.degc, float(decoded.temperature)])
-    await pseudopub(connection, ["datastore_channel", "upstream_channel"], None, [timestamp, decoded.uid, tsd.rh, float(decoded.humidity)])
+    await pseudopub(
+        connection,
+        ["datastore_channel", "upstream_channel"],
+        None,
+        [timestamp, decoded.uid, tsd.degc, float(decoded.temperature)],
+    )
+    await pseudopub(
+        connection,
+        ["datastore_channel", "upstream_channel"],
+        None,
+        [timestamp, decoded.uid, tsd.rh, float(decoded.humidity)],
+    )
     await connection.sadd(f"{redis_prefix}_success_timestamps", timestamp)
     await connection.hincrby(f"{redis_prefix}_sensor_uuid_counts", decoded.uid, 1)
-    await connection.hset(f"{redis_prefix}_sensor_uuid_timestamps", decoded.uid, timestamp)
+    await connection.hset(
+        f"{redis_prefix}_sensor_uuid_timestamps", decoded.uid, timestamp
+    )
     await connection.expire(f"{data_tag_label}{ulid}", 120)
 
 
@@ -405,7 +498,9 @@ def get_hardware_uid() -> (str, bytes):
     import glob
     import colourful_vegetables
 
-    raw_sd_card_id = bytes.fromhex(open(glob.glob("/sys/block/mmcblk*/device/cid")[0], "r").read())
+    raw_sd_card_id = bytes.fromhex(
+        open(glob.glob("/sys/block/mmcblk*/device/cid")[0], "r").read()
+    )
     raw_hashed_id = nacl.hash.sha256(raw_sd_card_id, encoder=nacl.encoding.RawEncoder)
     colour = colourful_vegetables.colours[raw_hashed_id[0] >> 4]
     veggy = colourful_vegetables.vegetables[raw_hashed_id[0] & 15]
@@ -420,7 +515,9 @@ async def register_session_box(aiohttp_client_session):
     logger.info("human name: %s" % human_name)
     packer, unpacker = await get_packer_unpacker(_constants.upstream_pubkey_bytes)
     url = f"{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/register"
-    status = await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, url, uid)
+    status = await make_wrapped_http_request(
+        aiohttp_client_session, packer, unpacker, url, uid
+    )
     logger.info(f"http successfully used to init uplink {status}")
     return (uid, packer, unpacker)
 
@@ -448,23 +545,34 @@ async def sample_to_upstream(loop=None):
     async for reading in pseudosub(connection, "upstream_channel"):
         timestamp = reading.timestamp
         reading = reading.value
-        last_seen = float(await connection.hget(f"{redis_prefix}_sensor_uuid_timestamps", reading[1]) or 0)
+        last_seen = float(
+            await connection.hget(f"{redis_prefix}_sensor_uuid_timestamps", reading[1])
+            or 0
+        )
         samples[reading[1] + 4096 * reading[2]] = reading
         now = time.time()
         if intervals_till_next_verification == 0:
-            first_seen, most_recently_seen = await make_wrapped_http_request(aiohttp_client_session, packer, unpacker, heartbeat_url, uid)
+            first_seen, most_recently_seen = await make_wrapped_http_request(
+                aiohttp_client_session, packer, unpacker, heartbeat_url, uid
+            )
             since_last_seen = int(now - most_recently_seen)
             if since_last_seen > 5 * max_update_interval:
-                logger.error("backend reports 5x longer since last update than expected, terminating uplink")
+                logger.error(
+                    "backend reports 5x longer since last update than expected, terminating uplink"
+                )
                 raise TimeoutError
             else:
-                logger.info(f"backend confirms update received {int(now-most_recently_seen)}")
+                logger.info(
+                    f"backend confirms update received {int(now-most_recently_seen)}"
+                )
                 intervals_till_next_verification = max_intervals_till_check
         if now > (last_sent + max_update_interval):
             update_samples = [x for x in samples.values()]
             logger.info(f"submitting {update_samples}")
             update_message = await packer(update_samples)
-            udp_uplink_socket.sendto(update_message, (_constants.upstream_host, _constants.upstream_port))
+            udp_uplink_socket.sendto(
+                update_message, (_constants.upstream_host, _constants.upstream_port)
+            )
             last_sent = time.time()
             intervals_till_next_verification -= 1
 
@@ -486,8 +594,12 @@ async def band_monitor(connection=None):
     await asyncio.sleep(handlebars.r1dx(20))
     while True:
         now = time.time()
-        good_stats = await connection.hgetall(f"{redis_prefix}_found_maybe_good_transmission_at_frequency")
-        fail_stats = await connection.hgetall(f"{redis_prefix}_found_bad_transmission_at_frequency")
+        good_stats = await connection.hgetall(
+            f"{redis_prefix}_found_maybe_good_transmission_at_frequency"
+        )
+        fail_stats = await connection.hgetall(
+            f"{redis_prefix}_found_bad_transmission_at_frequency"
+        )
         channel_stats = dict(stats={}, timestamp=int(now))
         for freq, count in sorted(good_stats.items()):
             failed = fail_stats.get(freq)
@@ -507,16 +619,25 @@ async def sensor_monitor(connection=None):
     await asyncio.sleep(handlebars.r1dx(20))
     while True:
         now = time.time()
-        sensor_uuid_counts = await connection.hgetall(f"{redis_prefix}_sensor_uuid_counts")
-        sensor_last_seen = await connection.hgetall(f"{redis_prefix}_sensor_uuid_timestamps")
+        sensor_uuid_counts = await connection.hgetall(
+            f"{redis_prefix}_sensor_uuid_counts"
+        )
+        sensor_last_seen = await connection.hgetall(
+            f"{redis_prefix}_sensor_uuid_timestamps"
+        )
         sensor_stats = dict(stats={}, timestamp=int(now))
         for uid, count in sorted(sensor_uuid_counts.items()):
-            sensor_stats["stats"][int(uid)] = [int(count), int(now - float(sensor_last_seen[uid]))]
+            sensor_stats["stats"][int(uid)] = [
+                int(count),
+                int(now - float(sensor_last_seen[uid])),
+            ]
         logger.info(json.dumps(sensor_stats))
         await asyncio.sleep(60)
 
 
-async def watchdog(connection=None, threshold=600, key="sproutwave_function_call_ticks"):
+async def watchdog(
+    connection=None, threshold=600, key="sproutwave_function_call_ticks"
+):
     """ run until it's been more than 600 seconds since all blocks ticked, then exit, signaling time for re-init """
     timeout = 600
     tick_cycle = 120
@@ -537,8 +658,17 @@ async def watchdog(connection=None, threshold=600, key="sproutwave_function_call
 
 def main():
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
-    redis_server_process = handlebars.start_redis_server(redis_socket_path=data_dir + "sproutwave.sock")
-    funcs = analog_to_block, block_to_sample, sample_to_datastore, sample_to_upstream, band_monitor, sensor_monitor
+    redis_server_process = handlebars.start_redis_server(
+        redis_socket_path=data_dir + "sproutwave.sock"
+    )
+    funcs = (
+        analog_to_block,
+        block_to_sample,
+        sample_to_datastore,
+        sample_to_upstream,
+        band_monitor,
+        sensor_monitor,
+    )
     proc_mapping = {}
     while True:
         for func in funcs:

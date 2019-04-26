@@ -1,13 +1,31 @@
 import sqlite3 as sql
-import time
 import tempfile
+import time
 
 # TODO: use pint to refine this?
 # used in meta tag to modify the set of compound units
 si_units = ["m", "kg", "s", "A", "K", "mol", "cd"]
-si_human = ["meter", "kilogram", "second", "ampere", "Degree Kelvin", "moles", "candela"]
+si_human = [
+    "meter",
+    "kilogram",
+    "second",
+    "ampere",
+    "Degree Kelvin",
+    "moles",
+    "candela",
+]
 # compound units
-unit_list = ["none", "degc", "rh", "pa", "watt", "ppm", "ph", "ms_per_cm", "umol_per_m2_s"]
+unit_list = [
+    "none",
+    "degc",
+    "rh",
+    "pa",
+    "watt",
+    "ppm",
+    "ph",
+    "ms_per_cm",
+    "umol_per_m2_s",
+]
 unit_human = [
     "None",
     "Degrees Celsius",
@@ -44,7 +62,10 @@ class TimeSeriesDatastore(object):
     def get_measurement_vectors(self, start=0, stop=-1):
         if stop == -1:
             stop = time.time()
-        selector = "SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s" % (str(start), str(stop))
+        selector = "SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s" % (
+            str(start),
+            str(stop),
+        )
         samples = self.cursor.execute(selector)
         labels = "timestamp sensor_uid units value meta".split()
         values = dict(zip(labels, zip(*samples)))
@@ -54,7 +75,10 @@ class TimeSeriesDatastore(object):
     def get_measurements(self, start=0, stop=-1):
         if stop == -1:
             stop = time.time()
-        selector = "SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s" % (str(start), str(stop))
+        selector = "SELECT * FROM readings WHERE Timestamp BETWEEN %s AND %s" % (
+            str(start),
+            str(stop),
+        )
         samples = self.cursor.execute(selector)
         labels = "timestamp sensor_uid units value meta".split()
         samples = [dict(zip(labels, sample)) for sample in samples]
@@ -62,7 +86,9 @@ class TimeSeriesDatastore(object):
             sample["units"] = unit_list[sample["units"]]
         return samples
 
-    def add_measurement(self, timestamp, sensor_uid, units, value, raw=False, meta=None):
+    def add_measurement(
+        self, timestamp, sensor_uid, units, value, raw=False, meta=None
+    ):
         if raw == True:
             unit_tag = units
         else:
