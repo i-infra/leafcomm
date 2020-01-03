@@ -10,21 +10,56 @@ import sys
 import time
 import typing
 
+import blosc
+import bottleneck
 import numpy
 
 import _constants
-import blosc
-import bottleneck
-import handlebars
 import ts_datastore as tsd
 from node_comms import *
 
 sampling_rate = 256_000
 L, H, E = 0, 1, 2
-logger = handlebars.get_logger(__name__, debug="--debug" in sys.argv)
+logger = get_logger(__name__, debug="--debug" in sys.argv)
 
 FilterFunc = typing.Callable[[numpy.ndarray], numpy.ndarray]
 Deciles = typing.Dict[int, typing.Tuple[int, int]]
+
+krng = open("/dev/urandom", "rb")
+
+
+def r1dx(x=20):
+    """ returns a random, fair integer from 1 to X as if rolling a dice with the specified number of sides """
+    max_r = 256
+    assert x <= max_r
+    while True:
+        # get one byte, take as int on [1,256]
+        r = int.from_bytes(krng.read(1), "little") + 1
+        # if byte is less than the max factor of 'x' on the interval max_r, return r%x+1
+        if r < (max_r - (max_r % x) + 1):
+            return (r % x) + 1
+
+
+def rerle(xs):
+    return [
+        (sum([i[0] for i in x[1]]), x[0]) for x in itertools.groupby(xs, lambda x: x[1])
+    ]
+
+
+def rle(xs):
+    return [(len(list(gp)), x) for x, gp in itertools.groupby(xs)]
+
+
+def rld(xs):
+    return itertools.chain.from_iterable((itertools.repeat(x, n) for n, x in xs))
+
+
+def _flatten(l):
+    return list(itertools.chain(*[[x] if type(x) not in [list] else x for x in l]))
+
+
+def debinary(ba):
+    return sum([x * 2 ** i for i, x in enumerate(reversed(ba))])
 
 
 @dataclasses.dataclass
@@ -107,7 +142,7 @@ def packed_bytes_to_iq(samples: bytes) -> numpy.ndarray:
 
 
 def get_new_center():
-    return 433_800_000 + handlebars.r1dx(10) * 20_000
+    return min(433_800_000 + r1dx(10) * 20_000, 433940000)
 
 
 async def analog_to_block() -> typing.Awaitable[None]:
@@ -127,7 +162,12 @@ async def analog_to_block() -> typing.Awaitable[None]:
     block_size = 512 * 64
     samp_size = block_size // 2
     # initial state
-    accumulating_blocks, blocks_accumulated, historical_power, sampled_background_block_count = (
+    (
+        accumulating_blocks,
+        blocks_accumulated,
+        historical_power,
+        sampled_background_block_count,
+    ) = (
         False,
         [],
         0,
@@ -137,19 +177,6 @@ async def analog_to_block() -> typing.Awaitable[None]:
     # primary sampling state machine
     # samples background amplitude, accumulate and transfer sample chunks significantly above ambient power
     async for byte_samples in sdr.stream(block_size, format="bytes"):
-        last_tick = float(
-            await connection.hget(
-                f"{redis_prefix}_function_call_ticks", handlebars.get_function_name()
-            )
-            or 0
-        )
-        await tick(connection)
-        now_tick = float(
-            await connection.hget(
-                f"{redis_prefix}_function_call_ticks", handlebars.get_function_name()
-            )
-            or 0
-        )
         complex_samples = packed_bytes_to_iq(byte_samples)
         # calculate cum and avg power
         block_power = numpy.sum(numpy.abs(complex_samples))
@@ -174,8 +201,21 @@ async def analog_to_block() -> typing.Awaitable[None]:
             sdr.set_center_freq(center_frequency)
             center_frequency = sdr.get_center_freq()
             logger.info("center frequency: %d" % center_frequency)
-        if block_power > historical_background_power * 1.02:
+        if block_power > historical_background_power * 1.05:
             if accumulating_blocks is False:
+                last_tick = float(
+                    await connection.hget(
+                        f"{redis_prefix}_function_call_ticks", get_function_name(),
+                    )
+                    or 0
+                )
+                await tick(connection)
+                now_tick = float(
+                    await connection.hget(
+                        f"{redis_prefix}_function_call_ticks", get_function_name(),
+                    )
+                    or 0
+                )
                 logger.info(
                     f"STARTING ACCUMULATION with {block_power} compared to {historical_background_power}"
                 )
@@ -251,7 +291,7 @@ def block_to_pulses(
     avg_power = bottleneck.nanmean(beep_smoothed)
     threshold = 1.1 * avg_power
     beep_binary = beep_smoothed > threshold
-    return Pulses(numpy.array(handlebars.rle(beep_binary)), compressed_iq_reading.ulid)
+    return Pulses(numpy.array(rle(beep_binary)), compressed_iq_reading.ulid)
 
 
 def pulses_to_deciles(pulses: Pulses) -> typing.Optional[Deciles]:
@@ -335,7 +375,7 @@ def demodulator(pulses: Pulses) -> typing.Iterable[Packet]:
         if E not in symbols and len(symbols) > 10:
             # NB. this is somewhat unique to the silver sensors in question
             # duration of low pulses determines bit value 100 -> 1; 10 -> 0
-            bits = [x[0] == 2 for x in handlebars.rle(symbols) if x[1] == 0]
+            bits = [x[0] == 2 for x in rle(symbols) if x[1] == 0]
             yield Packet(bits, errors, deciles, pulses.sequence[x:y], pulses.ulid)
 
 
@@ -377,6 +417,7 @@ class Sample:
     low_battery: bool
     button_pushed: bool
     ulid: str
+    timestamp: float
 
 
 def depacketize(
@@ -387,8 +428,7 @@ def depacketize(
         bitwidths = [0] + bitwidths
     field_positions = [x for x in itertools.accumulate(bitwidths)]
     results = [
-        handlebars.debinary(packet.bits[x:y])
-        for x, y in zip(field_positions, field_positions[1:])
+        debinary(packet.bits[x:y]) for x, y in zip(field_positions, field_positions[1:])
     ]
     return output_class(*results)
 
@@ -431,6 +471,7 @@ def silver_sensor_decoder(packet: Packet) -> typing.Optional[Sample]:
             n.low_battery,
             n.button_pushed,
             packet.ulid,
+            ulid2.get_ulid_timestamp(packet.ulid),
         )
 
 
@@ -445,26 +486,25 @@ def pulses_to_sample(pulses: Pulses) -> Sample:
             yield possibility
 
 
-async def successfully_decoded(connection, reading, decoded):
-    ulid, timestamp = reading.ulid, reading.timestamp
-    await pseudopub(
-        connection,
-        ["datastore_channel", "upstream_channel"],
-        None,
-        [timestamp, decoded.uid, tsd.degc, float(decoded.temperature)],
-    )
-    await pseudopub(
-        connection,
-        ["datastore_channel", "upstream_channel"],
-        None,
-        [timestamp, decoded.uid, tsd.rh, float(decoded.humidity)],
-    )
-    await connection.sadd(f"{redis_prefix}_success_timestamps", timestamp)
-    await connection.hincrby(f"{redis_prefix}_sensor_uuid_counts", decoded.uid, 1)
+async def handle_received_sample(connection, sample):
+    frames = [
+        [sample.timestamp, sample.uid, tsd.degc, float(sample.temperature)],
+        [sample.timestamp, sample.uid, tsd.rh, float(sample.humidity)],
+    ]
+    for frame in frames:
+        await pseudopub(
+            connection,
+            ["datastore_channel", "upstream_channel", "feedback_channel"],
+            sample.timestamp,
+            frame,
+        )
+
+    await connection.sadd(f"{redis_prefix}_success_timestamps", sample.timestamp)
+    await connection.hincrby(f"{redis_prefix}_sensor_uuid_counts", sample.uid, 1)
     await connection.hset(
-        f"{redis_prefix}_sensor_uuid_timestamps", decoded.uid, timestamp
+        f"{redis_prefix}_sensor_uuid_timestamps", sample.uid, sample.timestamp
     )
-    await connection.expire(f"{data_tag_label}{ulid}", 120)
+    await connection.expire(f"{data_tag_label}{sample.ulid}", 120)
 
 
 async def block_to_sample() -> typing.Awaitable[None]:
@@ -476,17 +516,17 @@ async def block_to_sample() -> typing.Awaitable[None]:
      * updates expirations of analog data block """
     connection = await init_redis()
     async for reading in pseudosub(connection, "transmissions"):
-        decoded = None
+        sample = None
         for filter_func in filters:
             pulses = block_to_pulses(reading, filter_func)
             if len(pulses.sequence) > 10:
-                for decoded in pulses_to_sample(pulses):
-                    logger.info(f"decoded {decoded} with {filter_func.__name__}")
-                    if decoded:
-                        await successfully_decoded(connection, reading, decoded)
-                if decoded:
+                for sample in pulses_to_sample(pulses):
+                    logger.info(f"decoded {sample} with {filter_func.__name__}")
+                    if sample:
+                        await handle_received_sample(connection, sample)
+                if sample:
                     break
-        if not decoded:
+        if not sample:
             await connection.expire(f"{data_tag_label}{reading.ulid}", 3600)
             await connection.sadd(f"{redis_prefix}_fail_timestamps", reading.timestamp)
 
@@ -591,7 +631,7 @@ async def band_monitor(connection=None):
     """ periodically log a table of how many blocks we've successfully or unsuccessfully decoded for all frequencies """
     if connection == None:
         connection = await init_redis()
-    await asyncio.sleep(handlebars.r1dx(20))
+    await asyncio.sleep(r1dx(20))
     while True:
         now = time.time()
         good_stats = await connection.hgetall(
@@ -616,7 +656,7 @@ async def sensor_monitor(connection=None):
     """ periodically log a table of last seen and number times seen for all sensors """
     if connection == None:
         connection = await init_redis()
-    await asyncio.sleep(handlebars.r1dx(20))
+    await asyncio.sleep(r1dx(20))
     while True:
         now = time.time()
         sensor_uuid_counts = await connection.hgetall(
@@ -658,7 +698,7 @@ async def watchdog(
 
 def main():
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
-    redis_server_process = handlebars.start_redis_server(
+    redis_server_process = start_redis_server(
         redis_socket_path=data_dir + "sproutwave.sock"
     )
     funcs = (
@@ -676,9 +716,9 @@ def main():
             logger.info("(re)starting %s" % name)
             if name in proc_mapping.keys():
                 proc_mapping[name].terminate()
-            proc_mapping[name] = handlebars.multi_spawner(func)
+            proc_mapping[name] = multi_spawner(func)
         time.sleep(30)
-        handlebars.multi_spawner(watchdog).join()
+        multi_spawner(watchdog).join()
 
 
 if __name__ == "__main__":

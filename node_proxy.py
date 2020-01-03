@@ -1,18 +1,20 @@
 import asyncio
 import dataclasses
+import importlib
 import logging
 import pathlib
 import ssl
 import sys
 
-import _constants
 import aiohttp
-import handlebars
-import user_datastore
 from aiohttp import web
+
+import _constants
+import alerter
+import user_datastore
 from node_comms import *
 
-logger = handlebars.get_logger(__name__, debug="--debug" in sys.argv)
+logger = get_logger(__name__, debug="--debug" in sys.argv)
 
 
 class ProxyDatagramProtocol(asyncio.DatagramProtocol):
@@ -173,28 +175,23 @@ async def get_latest(request):
 
 
 async def run_alerts(loop=None):
-    redis_connection = await init_redis("proxy")
-    while True:
-        last_seen_nodes = await redis_connection.hgetall(
-            f"{redis_prefix}_latest_message_timestamp"
-        )
-        alerts = None
-        reading = None
-        for uid, last_seen_timestamp in last_seen_nodes.items():
-            maybe_alerts = await connection.hget(
-                f"{redis_prefix}_uid_alert_mapping", uid
-            )
-            if maybe_alerts:
-                alerts = cbor.loads(maybe_alerts)
-            if last_seen_timestamp_timestamp > (time.time() - 60):
-                reading = await pseudosub1(
-                    redis_connection, f"updates_{uid.decode()}", do_tick=False
-                )
-                if reading and alerts:
-                    # alerts.get("thresholds")
-                    # {'alerts': [{'thresholds': {'degc': {'above': 50, 'below': None, 'duration': 300}, 'relhumidity': {'above': None, 'below': 10, 'duration': 600}}, 'useSMS': True, 'name': 'greenhouse 1', 'id':1102, 'useEmail': False}], 'phoneNumber': '+15558675309', 'email': None, 'lastUpdated': 1554951797731}
-                    print(reading, alerts)
-        time.sleep(10)
+    redis_connection = await init_redis("")
+    last_changed_ts = 0
+    async for reading in pseudosub(redis_connection, "feedback_channel"):
+        results = alerter.alerter(reading)
+        if results != None:
+            logger.debug(f"alerter_results {results}")
+            await pseudopub(redis_connection, ["feedback_commands"], None, results)
+
+
+async def do_controls(loop=None):
+    redis_connection = await init_redis("")
+    async for command in pseudosub(redis_connection, "feedback_commands"):
+        if command != None:
+            command_value = int(bool(command.value))
+            logger.debug(f"command_value {command_value}")
+            native_spawn(["sunxi-pio", "-m", f"PB9={command_value},2"])
+            open("command.value", "w").write(f"{command_value}")
 
 
 async def set_alerts(request):
@@ -243,6 +240,7 @@ def create_app(loop):
             )
         )
         app["redistribute_task"] = loop.create_task(redistribute())
+        app["run_alerts"] = loop.create_task(run_alerts())
         app["users_db"] = user_datastore.UserDatabase(db_name=f"{data_dir}/users_db.db")
         app["packer_unpacker_cache"] = {}
 
@@ -259,10 +257,9 @@ def create_app(loop):
 
 if __name__ == "__main__":
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
-    redis_server_process = handlebars.start_redis_server(
-        redis_socket_path=data_dir + "sproutwave.sock"
+    redis_server_process = start_redis_server(
+        redis_socket_path=data_dir + "proxysproutwave.sock"
     )
-    handlebars.start_redis_server(redis_socket_path=data_dir + "proxysproutwave.sock")
     loop = asyncio.get_event_loop()
     app = create_app(loop)
     if _constants.upstream_protocol == "https":

@@ -11,11 +11,14 @@ pyrtlsdr = {git = "https://github.com/roger-/pyrtlsdr.git"}
 cython = "*"
 pynacl = {git = "https://github.com/pyca/pynacl.git"}
 bottleneck = "*"
+scikit-build = "*"
 blosc = {git = "https://github.com/Blosc/python-blosc.git"}
 aiohttp = "*"
 aioredis = "*"
 scipy = "*"
 "ulid2" = "*"
+importlib = "*"
+boto3 = "*"
 
 [scripts]
 lint = "bash scripts/lint"
@@ -23,4 +26,4 @@ lint = "bash scripts/lint"
 [dev-packages]
 pyqrcode = "*"
 aioconsole = "*"
-black = "*"
+isort = "*"
