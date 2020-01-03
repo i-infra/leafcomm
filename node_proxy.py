@@ -161,11 +161,11 @@ async def get_latest(request):
     uid = await connection.hget(
         f"{redis_prefix}_user_pubkey_uid_mapping", pubkey_bytes.hex()
     )
-    latest = await connection.hget(f"{redis_prefix}_latest_value_frame", uid)
-    if latest is not None:
-        response = cbor.loads(latest)
-    else:
-        response = "NO DATA YET"
+    response = "NO DATA YET"
+    if uid is not None:
+        latest = await connection.hget(f"{redis_prefix}_latest_value_frame", uid)
+        if latest is not None:
+            response = cbor.loads(latest)
     encoded_encrypted_message = await wrap_message(
         pubkey_bytes, response, connection, b64=True
     )

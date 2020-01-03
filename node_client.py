@@ -20,7 +20,7 @@ async def test_signup():
     signup_message = dict(
         email="tester4@test.com",
         name="test_name",
-        nodeSecret=uid.hex(),
+        nodeSecret=uid,
         passwordHash=password_hash,
         passwordHint="test_password",
         phone="8675309",
@@ -104,7 +104,7 @@ async def test_race():
     )
 
 
-handlebars.multi_spawner(test_signup).join()
-handlebars.multi_spawner(test_race).join()
-handlebars.multi_spawner(test_alerts).join()
-handlebars.multi_spawner(test_latest).join()
+multi_spawner(test_signup).join()
+# handlebars.multi_spawner(test_race).join()
+# handlebars.multi_spawner(test_alerts).join()
+multi_spawner(test_latest).join()
