@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 
 import nacl.pwhash
+
 from enforce_types import enforce_types
 
 
@@ -70,9 +71,16 @@ class UserDatabase(object):
         selector = "SELECT * FROM users WHERE email=?"
         users = self.cursor.execute(selector, (email,)).fetchall()
         if users:
-            name, email, phone, password_hash_stored, password_meta_stored, node_id, alerts, app_settings = users[
-                0
-            ]
+            (
+                name,
+                email,
+                phone,
+                password_hash_stored,
+                password_meta_stored,
+                node_id,
+                alerts,
+                app_settings,
+            ) = users[0]
             if nacl.pwhash.verify(password_hash_stored, client_password_hash):
                 current_user = User(*users[0])
                 current_user.password_meta = ""
