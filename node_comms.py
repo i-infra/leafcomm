@@ -66,7 +66,7 @@ def any_false(maybe_false, my_array):
 
 def get_logger(application_name: str = None, debug=DEBUG):
     if application_name == None:
-        application_name = get_function_name()
+        application_name = get_function_name(1)
     "setup simultaneous logging to /tmp and to stdout"
     logger = logging.getLogger(application_name)
     logger.propagate = False
@@ -322,7 +322,7 @@ class CreateVerboseRedis:
             reprs = dict(
                 args=[truncate(f"{a}") for a in args],
                 kwargs=kwargs,
-                resp=truncate(f"resp"),
+                resp=truncate(f"{resp}"),
             )
             kwargs_msg = f', kwargs: {reprs["kwargs"]}' if kwargs else ""
             self.logger.debug(
@@ -365,9 +365,7 @@ maxmemory-policy volatile-lru
 save ''
 pidfile {redis_socket_path}.pid
 daemonize yes""".encode()
-    if not os.path.exists(redis_socket_path + ".pid") and os.path.exists(
-        f"/proc/{open(redis_socket_path+'.pid').read().strip()}"
-    ):
+    if not os.path.exists(redis_socket_path + ".pid"):
         resp, proc = native_spawn(["redis-server", "-"], stdin_input=conf, timeout=5)
         atexit.register(proc.terminate)
     else:
