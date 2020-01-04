@@ -453,7 +453,7 @@ async def pseudopub(connection, channels, timestamp=None, reading=None):
 async def pseudosub(connection, channel, timeout=360):
     while True:
         res = await pseudosub1(connection, channel, timeout)
-        if res and res.value != None:
+        if res != None and res.value != None:
             yield res
 
 
