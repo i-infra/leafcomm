@@ -373,53 +373,6 @@ daemonize yes""".encode()
     return proc
 
 
-ip_regex = re.compile("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")
-
-
-async def get_ip_from_host(hostname="ipinfo.io"):
-    if "." not in hostname:
-        raise ConnectionError("malformed hostname")
-    reader, writer = await fixed_open_connection(
-        "1.0.0.1", 443, ssl=True, server_hostname="1.0.0.1"
-    )
-    if not reader:
-        return
-    writer.write(
-        f"GET /dns-query?ct=application/dns-json&name={hostname}&type=A HTTP/1.1\r\nHost: 1.0.0.1\r\nConnection: close\r\n\r\n".encode()
-    )
-    headers = await reader.readuntil(b"\r\n\r\n")
-    status, resp, tail = parse_headers(headers)
-    length = int(resp[b"content-length"])
-    answer_bytes = await asyncio.wait_for(reader.readexactly(length), 5.0)
-    writer.close()
-    out = json.loads(answer_bytes.decode())
-    if "Answer" in out.keys() and len(out["Answer"]) > 0:
-        for maybe_answer in out["Answer"]:
-            maybe_ip = maybe_answer["data"]
-            if ip_regex.match(maybe_ip):
-                return maybe_ip
-    elif "Answer" not in out.keys() and out["Status"] == 0:
-        return True
-    elif out["Status"] == 3:
-        return False
-    else:
-        return
-
-
-def parse_headers(message):
-    try:
-        header_end = message.index(b"\r\n\r\n")
-        headers = [
-            z.split(b": ", 1)
-            for z in message[0:header_end].split(b"\n")
-            if z and b": " in z
-        ]
-        headers = dict([(x[0].lower().strip(), x[1].strip()) for x in headers])
-        return (message.split(b"\r\n", 1)[0], headers, message[header_end + 4 :])
-    except:
-        raise Exception("Couldn't parse HTTP headers in message. %s" % message)
-
-
 async def tick(
     connection, function_name_depth=1, key=f"{redis_prefix}_function_call_ticks"
 ):
