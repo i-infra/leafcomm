@@ -695,12 +695,15 @@ async def watchdog(
             return
         await asyncio.sleep(tick_cycle - (time.time() - now))
 
+from node_controller import *
 
 def main():
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
     redis_server_process = start_redis_server(
         redis_socket_path=data_dir + "sproutwave.sock"
     )
+    #TODO: replace time.sleep with polling for redis, or have start_redis_server do so...
+    time.sleep(5)
     funcs = (
         analog_to_block,
         block_to_sample,
@@ -708,6 +711,8 @@ def main():
         sample_to_upstream,
         band_monitor,
         sensor_monitor,
+        run_alerts,
+        run_controls
     )
     proc_mapping = {}
     while True:
