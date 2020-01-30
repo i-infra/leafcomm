@@ -1,18 +1,22 @@
 import decimal
 import fractions
 import math
+import os
 import sys
 import time
 
 import cairocffi as cairo
+
 import pycha.line
 import pycha.scatter
-import tsd
+import ts_datastore as tsd
 
 sensor_colors = ["#70B336", "#7CEAFF", "#CFA8FF", "#FFABCB", "#661479"]
 opacity = "80"
 sensor_colors = [x + opacity for x in sensor_colors]
-datastore = tsd.TimeSeriesDatastore()
+datastore = tsd.TimeSeriesDatastore(
+    f"{os.path.expanduser('~/.sproutwave/')}/sproutwave_v1.db"
+)
 
 
 def get_datasets(start=0, stop=-1, parameter="degc"):
@@ -92,14 +96,12 @@ def plotter(filename, datasets, width, height):
 
 def plot_temperatures(hours=1, width=1024, height=768):
     datasets = get_datasets(time.time() - hours * 60 * 60)
-    filename = "images/timespan-" + str(hours) + "hrs.svg"
+    filename = "timespan-" + str(hours) + "hrs.svg"
     surface = plotter(filename, datasets.items(), width, height)
 
 
 hour_scales = [1, 2, 4, 12, 24, 7 * 24]
 
-if __name__ in ["__main__", "__console__"]:
-    while True:
-        for hours in hour_scales:
-            plot_temperatures(hours)
-        time.sleep(60)
+if __name__ == "__main__":
+    for hours in hour_scales:
+        plot_temperatures(hours)
