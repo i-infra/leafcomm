@@ -15,12 +15,17 @@ import bottleneck
 import numpy
 
 import _constants
-import ts_datastore as tsd
+import ts_datastore
 from node_comms import *
+from node_controller import *
 
 sampling_rate = 256_000
 L, H, E = 0, 1, 2
 logger = get_logger(__name__, debug="--debug" in sys.argv)
+global EXIT_NOW
+EXIT_NOW = False
+EXIT = b"EXIT"
+EXIT_KEY = f"{redis_prefix}_exit"
 
 FilterFunc = typing.Callable[[numpy.ndarray], numpy.ndarray]
 Deciles = typing.Dict[int, typing.Tuple[int, int]]
@@ -205,14 +210,16 @@ async def analog_to_block() -> typing.Awaitable[None]:
             if accumulating_blocks is False:
                 last_tick = float(
                     await connection.hget(
-                        f"{redis_prefix}_function_call_ticks", get_function_name(),
+                        f"{redis_prefix}_f_ticks", get_function_name(),
                     )
                     or 0
                 )
-                await tick(connection)
+                await connection.hset(
+                    f"{redis_prefix}_f_ticks", get_function_name(), time.time()
+                )
                 now_tick = float(
                     await connection.hget(
-                        f"{redis_prefix}_function_call_ticks", get_function_name(),
+                        f"{redis_prefix}_f_ticks", get_function_name(),
                     )
                     or 0
                 )
@@ -276,9 +283,10 @@ async def analog_to_block() -> typing.Awaitable[None]:
                     )
                 blocks_accumulated, accumulating_blocks = [], False
                 gc.collect()
+        if await connection.llen(EXIT_KEY):
+            break
     await sdr.stop()
     sdr.close()
-    return None
 
 
 def block_to_pulses(
@@ -459,10 +467,6 @@ def silver_sensor_decoder(packet: Packet) -> typing.Optional[Sample]:
         if n.model == 5:
             success = True
     if success:
-        if len(packet.bits) == 42:
-            open("42_bits", "a").write(
-                "".join([{True: "1", False: "0"}[bit] for bit in packet.bits]) + "\n"
-            )
         return Sample(
             n.uid + 1024 + n.channel,
             temp,
@@ -488,8 +492,8 @@ def pulses_to_sample(pulses: Pulses) -> Sample:
 
 async def handle_received_sample(connection, sample):
     frames = [
-        [sample.timestamp, sample.uid, tsd.degc, float(sample.temperature)],
-        [sample.timestamp, sample.uid, tsd.rh, float(sample.humidity)],
+        [sample.timestamp, sample.uid, ts_datastore.degc, float(sample.temperature)],
+        [sample.timestamp, sample.uid, ts_datastore.rh, float(sample.humidity)],
     ]
     for frame in frames:
         await pseudopub(
@@ -549,6 +553,13 @@ def get_hardware_uid() -> (str, bytes):
     return (human_name, node_id)
 
 
+async def wait_or_exit(connection, tick_time):
+    res = await connection.blpop(EXIT_KEY, timeout=tick_time)
+    if res:
+        await connection.lpush(EXIT_KEY, res[1])
+        return res[1]
+
+
 async def register_session_box(aiohttp_client_session):
     """ register node with backend. """
     human_name, uid = get_hardware_uid()
@@ -571,7 +582,7 @@ async def sample_to_upstream(loop=None):
 
     heartbeat_url = f"{_constants.upstream_protocol}://{_constants.upstream_host}:{_constants.upstream_port}/check"
     connection = await init_redis()
-    await tick(connection)
+    await connection.hset(f"{redis_prefix}_f_ticks", get_function_name(), time.time())
     if loop == None:
         loop = asyncio.get_event_loop()
     aiohttp_client_session = aiohttp.ClientSession(loop=loop)
@@ -615,24 +626,23 @@ async def sample_to_upstream(loop=None):
             )
             last_sent = time.time()
             intervals_till_next_verification -= 1
+    await aiohttp_client_session.close()
 
 
 async def sample_to_datastore() -> typing.Awaitable[None]:
     """ logs samples in the local sqlite database """
     connection = await init_redis()
-    datastore = tsd.TimeSeriesDatastore(db_name=data_dir + "sproutwave_v1.db")
+    datastore = ts_datastore.TimeSeriesDatastore(db_name=data_dir + "sproutwave_v1.db")
     sys.stderr.write(datastore.db_name + "\n")
     async for reading in pseudosub(connection, "datastore_channel"):
         datastore.add_measurement(*reading.value, raw=True)
-    return None
 
 
-async def band_monitor(connection=None):
+async def band_monitor():
     """ periodically log a table of how many blocks we've successfully or unsuccessfully decoded for all frequencies """
-    if connection == None:
-        connection = await init_redis()
+    connection = await init_redis()
     await asyncio.sleep(r1dx(20))
-    while True:
+    async for _ in pseudosub(connection, None, timeout=60):
         now = time.time()
         good_stats = await connection.hgetall(
             f"{redis_prefix}_found_maybe_good_transmission_at_frequency"
@@ -649,15 +659,14 @@ async def band_monitor(connection=None):
                 failed = int(failed)
             channel_stats["stats"][int(freq)] = [int(count), failed]
         logger.info(json.dumps(channel_stats))
-        await asyncio.sleep(60)
 
 
-async def sensor_monitor(connection=None):
+async def sensor_monitor(connection=None, tick_time=60):
     """ periodically log a table of last seen and number times seen for all sensors """
     if connection == None:
         connection = await init_redis()
     await asyncio.sleep(r1dx(20))
-    while True:
+    async for _ in pseudosub(connection, None, 60):
         now = time.time()
         sensor_uuid_counts = await connection.hgetall(
             f"{redis_prefix}_sensor_uuid_counts"
@@ -672,18 +681,15 @@ async def sensor_monitor(connection=None):
                 int(now - float(sensor_last_seen[uid])),
             ]
         logger.info(json.dumps(sensor_stats))
-        await asyncio.sleep(60)
 
 
-async def watchdog(
-    connection=None, threshold=600, key="sproutwave_function_call_ticks"
-):
+async def watchdog(connection=None, threshold=600, key="sproutwave_f_ticks"):
     """ run until it's been more than 600 seconds since all blocks ticked, then exit, signaling time for re-init """
     timeout = 600
     tick_cycle = 120
     if connection == None:
         connection = await init_redis()
-    while True:
+    async for _ in pseudosub(connection, None, tick_cycle):
         now = time.time()
         ticks = await get_ticks(connection, key=key)
         process_stats = dict(stats={}, timestamp=int(now))
@@ -692,17 +698,27 @@ async def watchdog(
         logger.info(json.dumps(process_stats))
         if any([(now - timestamp) > timeout for timestamp in ticks.values()]):
             await connection.delete(key)
-            return
-        await asyncio.sleep(tick_cycle - (time.time() - now))
+            raise TimeoutError("Watchdog detected timeout.")
 
-from node_controller import *
+
+def time_to_exit(signalnum, frame):
+    global EXIT_NOW
+
+    async def indicate_exit():
+        connection = await init_redis()
+        await connection.lpush(EXIT_KEY, EXIT)
+
+    multi_spawner(indicate_exit).join()
+    EXIT_NOW = True
+
 
 def main():
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
+    signal.signal(signal.SIGINT, time_to_exit)
     redis_server_process = start_redis_server(
         redis_socket_path=data_dir + "sproutwave.sock"
     )
-    #TODO: replace time.sleep with polling for redis, or have start_redis_server do so...
+    # TODO: replace time.sleep with polling for redis, or have start_redis_server do so...
     time.sleep(5)
     funcs = (
         analog_to_block,
@@ -712,10 +728,10 @@ def main():
         band_monitor,
         sensor_monitor,
         run_alerts,
-        run_controls
+        run_controls,
     )
     proc_mapping = {}
-    while True:
+    while not EXIT_NOW:
         for func in funcs:
             name = func.__name__
             logger.info("(re)starting %s" % name)

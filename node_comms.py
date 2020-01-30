@@ -35,6 +35,8 @@ CURRENT_PROTOCOL_VERSION = 1
 data_tag_label = "__"
 redis_prefix = "sproutwave"
 data_dir = os.path.expanduser("~/.sproutwave/")
+EXIT = b"EXIT"
+EXIT_KEY = f"{redis_prefix}_exit"
 uvloop = None
 
 DEBUG = bool(os.getenv("DEBUG") or "--debug" in sys.argv)
@@ -126,13 +128,7 @@ def multi_spawner(function_or_coroutine, cpu_index=0, forever=False):
             if asyncio.iscoroutinefunction(actual_function):
                 if uvloop:
                     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-                loop = asyncio.get_event_loop()
-                accepts_loop = "loop" in inspect.getfullargspec(actual_function).args
-                if accepts_loop:
-                    task = loop.create_task(target_function_or_coroutine(loop=loop))
-                else:
-                    task = loop.create_task(target_function_or_coroutine())
-                res = loop.run_until_complete(task)
+                res = asyncio.run(target_function_or_coroutine())
             else:
                 loop = None
                 res = target_function_or_coroutine()
@@ -140,12 +136,6 @@ def multi_spawner(function_or_coroutine, cpu_index=0, forever=False):
             ex_type, ex, tb = sys.exc_info()
             logger.error("".join(traceback.format_exc()))
             return None
-        if forever and loop:
-            try:
-                loop.run_forever()
-            except KeyboardInterrupt:
-                pass
-            loop.close()
         return res
 
     process = multiprocessing.Process(
@@ -225,48 +215,6 @@ def which(program_name):
             if is_exe(exe_file):
                 return exe_file
     return None
-
-
-async def fixed_open_connection(
-    host=None,
-    port=None,
-    connected_socket=None,
-    connect_timeout=10,
-    loop=None,
-    limit=65536,
-    **kwds,
-):
-    " fixes some implementation quirks present in asyncio.open_connection, offers ~ the same API "
-    loop = loop or asyncio.get_event_loop()
-    reader = asyncio.StreamReader(limit=limit, loop=loop)
-    protocol = asyncio.StreamReaderProtocol(reader, loop=loop)
-    if host and port and not connected_socket:
-        request_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        request_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        request_socket.setblocking(False)
-        try:
-            await asyncio.wait_for(
-                loop.sock_connect(request_socket, (host, port)), connect_timeout
-            )
-        except (
-            asyncio.TimeoutError,
-            RuntimeError,
-            ConnectionError,
-            OSError,
-            asyncio.streams.IncompleteReadError,
-        ):
-            logging.debug("connect failed: %s:%d" % (host, port))
-            request_socket = None
-    if connected_socket and not host and not port:
-        request_socket = sock
-    if not request_socket:
-        return (None, None)
-    transport, _ = await loop.create_connection(
-        lambda: protocol, sock=request_socket, **kwds
-    )
-    transport.set_write_buffer_limits(0)
-    writer = asyncio.StreamWriter(transport, protocol, reader, loop)
-    return (reader, writer)
 
 
 class CreateVerboseRedis:
@@ -365,7 +313,13 @@ maxmemory-policy volatile-lru
 save ''
 pidfile {redis_socket_path}.pid
 daemonize yes""".encode()
-    if not os.path.exists(redis_socket_path + ".pid"):
+    pid_path = "{redis_socket_path}.pid"
+    already_running = False
+    if os.path.exists(pid_path):
+        maybe_pid = int(open(pid_path).read().strip())
+        if os.path.exists(f"/proc/{maybe_pid}/maps"):
+            already_running = True
+    if not already_running:
         resp, proc = native_spawn(["redis-server", "-"], stdin_input=conf, timeout=5)
         atexit.register(proc.terminate)
     else:
@@ -373,14 +327,7 @@ daemonize yes""".encode()
     return proc
 
 
-async def tick(
-    connection, function_name_depth=1, key=f"{redis_prefix}_function_call_ticks"
-):
-    name = get_function_name(function_name_depth)
-    await connection.hset(key, name, time.time())
-
-
-async def get_ticks(connection=None, key=f"{redis_prefix}_function_call_ticks"):
+async def get_ticks(connection=None, key=f"{redis_prefix}_f_ticks"):
     if connection == None:
         connection = await init_redis()
     resp = await connection.hgetall(key)
@@ -401,10 +348,34 @@ async def pseudopub(connection, channels, timestamp=None, reading=None):
     return data_tag
 
 
-async def pseudosub(connection, channel, timeout=360):
+async def pseudosub1(connection, channel, timeout=360):
+    maybe_value = await connection.brpop(
+        f"{redis_prefix}_{channel}", EXIT_KEY, timeout=timeout
+    )
+    if maybe_value == None:
+        return None
+    else:
+        channel, value = maybe_value
+        if value == EXIT:
+            await connection.lpush(EXIT_KEY, EXIT)
+            return EXIT
+    obj_bytes = await connection.get(value)
+    ulid = value.replace(data_tag_label.encode(), b"", 1)
+    return SerializedReading(ulid, obj_bytes)
+
+
+async def tick_on_schedule(connection, timeout):
+    return await pseudosub(connection, None, timeout, _depth_offset=1)
+
+
+async def pseudosub(connection, channel, timeout=360, _depth_offset=0):
     while True:
         res = await pseudosub1(connection, channel, timeout)
-        if res != None and res.value != None:
+        caller_name = get_function_name(1 + _depth_offset)
+        await connection.hset(f"{redis_prefix}_f_ticks", caller_name, time.time())
+        if res == EXIT:
+            break
+        elif res != None:
             yield res
 
 
@@ -420,15 +391,6 @@ class SerializedReading:
         else:
             self.value = None
         self.timestamp = ulid2.get_ulid_timestamp(self.ulid)
-
-
-async def pseudosub1(connection, channel, timeout=360, depth=3, do_tick=True):
-    channel, data_tag = await connection.brpop(f"{redis_prefix}_{channel}", timeout)
-    obj_bytes = await connection.get(data_tag)
-    ulid = data_tag.replace(data_tag_label.encode(), b"", 1)
-    if do_tick == True:
-        await tick(connection, function_name_depth=depth)
-    return SerializedReading(ulid, obj_bytes)
 
 
 async def get_next_counter(counter_name, redis_connection):
