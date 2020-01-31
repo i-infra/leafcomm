@@ -9,12 +9,12 @@ import cairocffi as cairo
 
 import pycha.line
 import pycha.scatter
-import ts_datastore as tsd
+import ts_datastore
 
 sensor_colors = ["#70B336", "#7CEAFF", "#CFA8FF", "#FFABCB", "#661479"]
 opacity = "80"
 sensor_colors = [x + opacity for x in sensor_colors]
-datastore = tsd.TimeSeriesDatastore(
+datastore = ts_datastore.TimeSeriesDatastore(
     f"{os.path.expanduser('~/.sproutwave/')}/sproutwave_v1.db"
 )
 

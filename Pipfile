@@ -10,15 +10,15 @@ numpy = "*"
 pyrtlsdr = {git = "https://github.com/roger-/pyrtlsdr.git"}
 cython = "*"
 pynacl = {git = "https://github.com/pyca/pynacl.git"}
-bottleneck = "*"
 scikit-build = "*"
+bottleneck = "*"
 blosc = {git = "https://github.com/Blosc/python-blosc.git"}
 aiohttp = "*"
 aioredis = "*"
 scipy = "*"
 "ulid2" = "*"
-importlib = "*"
 boto3 = "*"
+pint = "*"
 
 [scripts]
 lint = "bash scripts/lint"
@@ -27,3 +27,4 @@ lint = "bash scripts/lint"
 pyqrcode = "*"
 aioconsole = "*"
 isort = "*"
+vulture = "*"

@@ -1,11 +1,21 @@
-from node_core import *
 import sns_abstraction
+from node_core import *
+import asyncio
 
 IN = 1
 OUT = -1
+DEFAULT_STATE = 0
 
 class Actuator:
-    def __init__(self, direction, work_units, flow_measurement, actuator_name, description, system_name):
+    def __init__(
+        self,
+        direction,
+        work_units,
+        flow_measurement,
+        actuator_name,
+        description,
+        system_name,
+    ):
         self.direction = direction
         self.input_unit, self.output_unit = work_units
         if flow_measurement:
@@ -14,11 +24,19 @@ class Actuator:
         self.system_name = system_name
         self.name = actuator_name
 
-DEGC = 1
-RH = 2
+
 
 class BangBangWorker:
-    def __init__(self, name = "refridgerator controller", target_sensor = 1279, target_units = DEGC, low=6, high=8, actuator = None, redis_connection = None):
+    def __init__(
+        self,
+        name="refridgerator controller",
+        target_sensor=1279,
+        target_units=ts_datastore.degc,
+        low=6,
+        high=8,
+        actuator=None,
+        redis_connection=None,
+    ):
         self.name = name
         self.high = high
         self.low = low
@@ -26,26 +44,34 @@ class BangBangWorker:
         self.target_units = target_units
         self.actuator = actuator
         self.redis_connection = redis_connection
-        self.actuator = Actuator(direction = IN, work_units = ("watts", "temperature"), flow_measurement = False, actuator_name = "compressor", description = "electric motor compressing a gas and pumping heat from a system", system_name = "refridgerator")
+        self.actuator = Actuator(
+            direction=IN,
+            work_units=("watts", "temperature"),
+            flow_measurement=False,
+            actuator_name="compressor",
+            description="electric motor compressing a gas and pumping heat from a system",
+            system_name="refridgerator",
+        )
         self.key_name = f"{name}@{target_sensor}({low},{high})x{self.actuator.name}"
         self.logger = get_logger(self.key_name)
         self.last_updated = 0
+        asyncio.create_task(self.set_state(DEFAULT_STATE))
 
     async def get_state(self):
         state = await self.redis_connection.get(self.key_name)
-        self.logger.debug(f'got state: {state}')
+        self.logger.debug(f"got state: {state}")
         return state
 
     async def set_state(self, value):
-        self.logger.debug(f'setting state: {value}')
+        self.logger.debug(f"setting state: {value}")
         return await self.redis_connection.set(self.key_name, value)
 
     async def update_state(self, sensor_reading):
         ts, ulid = sensor_reading.timestamp, sensor_reading.ulid
-        self.last_updated = ts
         _, sensor_uid, units, value = sensor_reading.value
         if sensor_uid == self.target_sensor and units == self.target_units:
-            state_from_redis =  (await self.get_state()) or False
+            self.last_updated = ts
+            state_from_redis = (await self.get_state()) or False
             compressor_on = bool(int(state_from_redis))
             tempDegF = int(value * 9 / 5 + 32)
             self.logger.info(f"compressor_on: {compressor_on}, temp: {tempDegF}degF")
@@ -74,8 +100,6 @@ async def run_controls(loop=None):
         if command != None:
             command_value = int(bool(command.value))
             logger.debug(f"command_value {command_value}")
-            #native_spawn(["sunxi-pio", "-m", f"PB9={command_value},2"])
-            #open("command.value", "w").write(f"{command_value}")
+            # native_spawn(["sunxi-pio", "-m", f"PB9={command_value},2"])
+            # open("command.value", "w").write(f"{command_value}")
             await bbw.set_state(command_value)
-
-

@@ -174,7 +174,6 @@ async def get_latest(request):
     )
 
 
-
 async def set_alerts(request):
     connection = request.app["redis"]
     posted_bytes = await request.read()
