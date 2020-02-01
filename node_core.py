@@ -150,141 +150,74 @@ def get_new_center():
     return min(433_800_000 + r1dx(10) * 20_000, 433940000)
 
 
-async def analog_to_block() -> typing.Awaitable[None]:
-    # this implements the meat of the radio receiving and monitoring
-    # * streams data from the RTL-SDR hardware
-    # * models background noise
-    # * accumulates and enqueues compressed recordings of transmissions for future processing
-    # uses rtlsdraio, node_comms, and numpy
-    # lowpass filter tracking amplitude
-    import gc
+async def analog_to_block():
     from rtlsdr import rtlsdraio
 
     sdr = rtlsdraio.RtlSdrAio()
     sdr.rs, sdr.fc, sdr.gain = sampling_rate, 433900000.0, 9
     connection = await init_redis()
-    # number of bytes
-    block_size = 512 * 64
-    samp_size = block_size // 2
-    # initial state
-    (
-        accumulating_blocks,
-        blocks_accumulated,
-        historical_power,
-        sampled_background_block_count,
-    ) = (
-        False,
-        [],
-        0,
-        0,
+    bytes_per_block = 512 * 64
+    samples_per_block = bytes_per_block // 2
+    center_frequency = sdr.fc
+    max_blocks_per_sample = 64
+    block_power_history = 256
+    complex_samples = numpy.zeros(
+        samples_per_block * max_blocks_per_sample, dtype=numpy.complex64
     )
-    center_frequency = 433900000.0
-    # primary sampling state machine
-    # samples background amplitude, accumulate and transfer sample chunks significantly above ambient power
-    async for byte_samples in sdr.stream(block_size, format="bytes"):
-        complex_samples = packed_bytes_to_iq(byte_samples)
-        # calculate cum and avg power
-        block_power = numpy.sum(numpy.abs(complex_samples))
-        # init accumulator safely
-        if historical_power == 0:
-            historical_power = block_power
-            logger.info(f"INIT WITH HISTORICAL POWER {historical_power}")
-            sampled_background_block_count += 1
-        historical_background_power = historical_power / sampled_background_block_count
-        #  do background ops if not accumulating data
-        if sampled_background_block_count % 1000 == 1 and accumulating_blocks is False:
-            # reset threshold every 10k blocks
-            if sampled_background_block_count > 10000:
-                logger.info(
-                    f"resetting accumulator to {int(historical_background_power)}"
-                )
-                historical_power, sampled_background_block_count = (
-                    historical_background_power,
-                    1,
-                )
-            center_frequency = get_new_center()
-            sdr.set_center_freq(center_frequency)
-            center_frequency = sdr.get_center_freq()
-            logger.info("center frequency: %d" % center_frequency)
-        if block_power > historical_background_power * 1.05:
-            if accumulating_blocks is False:
-                last_tick = float(
-                    await connection.hget(
-                        f"{redis_prefix}_f_ticks", get_function_name(),
-                    )
-                    or 0
-                )
-                await connection.hset(
-                    f"{redis_prefix}_f_ticks", get_function_name(), time.time()
-                )
-                now_tick = float(
-                    await connection.hget(
-                        f"{redis_prefix}_f_ticks", get_function_name(),
-                    )
-                    or 0
-                )
-                logger.info(
-                    f"STARTING ACCUMULATION with {block_power} compared to {historical_background_power}"
-                )
-                start_of_transmission_timestamp = time.time()
-            historical_power += (block_power - historical_background_power) / 100.0
-            accumulating_blocks = True
-            blocks_accumulated.append(complex_samples)
-        else:
-            historical_power += block_power
-            sampled_background_block_count += 1
-            if accumulating_blocks is True:
-                len_accumulated = len(blocks_accumulated)
-                if len_accumulated > 9 and len_accumulated < 40:
-                    end_of_transmission_timestamp = time.time()
-                    blocks_accumulated.append(complex_samples)
-                    sampled_message = numpy.concatenate(blocks_accumulated)
-                    info = compress(sampled_message)
-                    info["center_frequency"] = center_frequency
-                    ulid = await pseudopub(
-                        connection,
-                        "transmissions",
-                        timestamp=start_of_transmission_timestamp,
-                        reading=info,
-                    )
-                    logger.debug(
-                        "flushing: %s"
-                        % {
-                            "start_timestamp": start_of_transmission_timestamp,
-                            "duration_ms": int(
-                                (
-                                    end_of_transmission_timestamp
-                                    - start_of_transmission_timestamp
-                                )
-                                * 1000
-                            ),
-                            "center_freq": center_frequency,
-                            "block_count": len(blocks_accumulated),
-                            "message power": int(
-                                numpy.sum(numpy.abs(sampled_message))
-                                / len(blocks_accumulated)
-                            ),
-                            "avg": int(historical_background_power),
-                            "lifetime_blocks": sampled_background_block_count,
-                            "iteration_duration": time.time() - now_tick,
-                            "ulid": ulid,
-                        }
-                    )
-                    await connection.hincrby(
-                        f"{redis_prefix}_found_maybe_good_transmission_at_frequency",
-                        center_frequency,
-                        1,
-                    )
-                else:
-                    await connection.hincrby(
-                        f"{redis_prefix}_found_bad_transmission_at_frequency",
-                        center_frequency,
-                        1,
-                    )
-                blocks_accumulated, accumulating_blocks = [], False
-                gc.collect()
+    int8_samples = numpy.zeros(
+        bytes_per_block * max_blocks_per_sample, dtype=numpy.int8
+    )
+    block_powers = numpy.zeros(max_blocks_per_sample * 4, dtype=numpy.float32)
+    block_index = 0
+    running_average_block_power = 0
+    power_history_index = 0
+    start_of_transmission_timestamp = 0
+    one_stddev = 100
+    async for byte_samples in sdr.stream(bytes_per_block, format="bytes"):
         if await connection.llen(EXIT_KEY):
             break
+        samp_index = block_index * samples_per_block
+        complex_samples[
+            samp_index : samp_index + samples_per_block
+        ] = packed_bytes_to_iq(byte_samples)
+        block_powers[power_history_index] = numpy.sum(
+            numpy.abs(complex_samples[samp_index : samp_index + samples_per_block])
+        )
+        running_average_block_power = bottleneck.nanmean(block_powers)
+        print(
+            block_index,
+            power_history_index,
+            running_average_block_power,
+            block_powers[power_history_index],
+            one_stddev,
+        )
+        if (
+            block_powers[power_history_index]
+            >= running_average_block_power + one_stddev / 10
+        ):
+            if block_index == 0:
+                start_of_transmission_timestamp = time.time()
+            block_index += 1
+        else:
+            if block_index > 1:
+                end_of_transmission_timestamp = time.time()
+            if block_index > 9:
+                info = compress(complex_samples[: samp_index + samples_per_block])
+                one_stddev = numpy.std(block_powers)
+                info["center_frequency"] = center_frequency
+                ulid = await pseudopub(
+                    connection,
+                    "transmissions",
+                    timestamp=start_of_transmission_timestamp,
+                    reading=info,
+                )
+            block_index = 0
+        power_history_index += 1
+        power_history_index %= block_power_history
+        block_index %= max_blocks_per_sample
+        if power_history_index == 0:
+            center_frequency = get_new_center()
+            sdr.set_center_freq(center_frequency)
     await sdr.stop()
     sdr.close()
 
