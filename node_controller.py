@@ -6,6 +6,7 @@ IN = 1
 OUT = -1
 DEFAULT_STATE = 0
 
+
 class Actuator:
     def __init__(
         self,
@@ -23,7 +24,6 @@ class Actuator:
         self.description = description
         self.system_name = system_name
         self.name = actuator_name
-
 
 
 class BangBangWorker:

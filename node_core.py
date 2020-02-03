@@ -4,13 +4,11 @@ import itertools
 import json
 import os
 import pathlib
-import pprint
 import statistics
 import sys
 import time
 import typing
 
-import blosc
 import bottleneck
 import numpy
 
@@ -19,7 +17,7 @@ import ts_datastore
 from node_comms import *
 from node_controller import *
 
-sampling_rate = 256_000
+RTLSDR_SAMPLE_RATE = 256_000
 L, H, E = 0, 1, 2
 logger = get_logger(__name__, debug="--debug" in sys.argv)
 global EXIT_NOW
@@ -104,7 +102,7 @@ try:
         return b, a
 
     signal_filter_coefficients = dict(
-        zip(("b", "a"), build_butter_filter(2000, sampling_rate, order=4))
+        zip(("b", "a"), build_butter_filter(2000, RTLSDR_SAMPLE_RATE, order=4))
     )
 
     def lowpass(xs):
@@ -115,27 +113,6 @@ try:
     filters = [brickwall, lowpass]
 except:
     filters = [brickwall]
-
-
-def compress(in_):
-    return dict(
-        size=in_.size,
-        dtype=in_.dtype.str,
-        data=blosc.compress_ptr(
-            in_.__array_interface__["data"][0],
-            in_.size,
-            in_.dtype.itemsize,
-            clevel=1,
-            shuffle=blosc.BITSHUFFLE,
-            cname="lz4",
-        ),
-    )
-
-
-def decompress(size: int, dtype: str, data: bytes, **kwargs) -> numpy.ndarray:
-    out = numpy.empty(size, dtype)
-    blosc.decompress_ptr(data, out.__array_interface__["data"][0])
-    return out
 
 
 def packed_bytes_to_iq(samples: bytes) -> numpy.ndarray:
@@ -154,7 +131,7 @@ async def analog_to_block():
     from rtlsdr import rtlsdraio
 
     sdr = rtlsdraio.RtlSdrAio()
-    sdr.rs, sdr.fc, sdr.gain = sampling_rate, 433900000.0, 9
+    sdr.rs, sdr.fc, sdr.gain = RTLSDR_SAMPLE_RATE, 433900000.0, 9
     connection = await init_redis()
     bytes_per_block = 512 * 64
     samples_per_block = bytes_per_block // 2
@@ -184,13 +161,6 @@ async def analog_to_block():
             numpy.abs(complex_samples[samp_index : samp_index + samples_per_block])
         )
         running_average_block_power = bottleneck.nanmean(block_powers)
-        print(
-            block_index,
-            power_history_index,
-            running_average_block_power,
-            block_powers[power_history_index],
-            one_stddev,
-        )
         if (
             block_powers[power_history_index]
             >= running_average_block_power + one_stddev / 10
@@ -202,16 +172,23 @@ async def analog_to_block():
             if block_index > 1:
                 end_of_transmission_timestamp = time.time()
             if block_index > 9:
-                info = compress(complex_samples[: samp_index + samples_per_block])
                 one_stddev = numpy.std(block_powers)
-                info["center_frequency"] = center_frequency
                 ulid = await pseudopub(
                     connection,
                     "transmissions",
                     timestamp=start_of_transmission_timestamp,
-                    reading=info,
+                    reading=complex_samples[: samp_index + samples_per_block],
+                    metadata = {"center_frequency": center_frequency}
                 )
             block_index = 0
+        if power_history_index % 100 == 1:
+            print(
+                block_index,
+                power_history_index,
+                running_average_block_power,
+                block_powers[power_history_index],
+                one_stddev,
+            )
         power_history_index += 1
         power_history_index %= block_power_history
         block_index %= max_blocks_per_sample
@@ -223,16 +200,15 @@ async def analog_to_block():
 
 
 def block_to_pulses(
-    compressed_iq_reading: SerializedReading, smoother: FilterFunc = brickwall
+    iq_reading: SerializedReading, smoother: FilterFunc = brickwall
 ) -> Pulses:
     """ takes a compressed block of analog samples, takes magnitude, amplitude-thresholds and returns pulses """
-    beep_samples = decompress(**compressed_iq_reading.value)
-    beep_absolute = numpy.abs(beep_samples)
+    beep_absolute = numpy.abs(iq_reading.value)
     beep_smoothed = smoother(beep_absolute)
     avg_power = bottleneck.nanmean(beep_smoothed)
     threshold = 1.1 * avg_power
     beep_binary = beep_smoothed > threshold
-    return Pulses(numpy.array(rle(beep_binary)), compressed_iq_reading.ulid)
+    return Pulses(numpy.array(rle(beep_binary)), iq_reading.ulid)
 
 
 def pulses_to_deciles(pulses: Pulses) -> typing.Optional[Deciles]:
@@ -379,18 +355,7 @@ def silver_sensor_decoder(packet: Packet) -> typing.Optional[Sample]:
     success = False
     if packet.errors:
         return
-    if len(packet.bits) == 42:
-        n = depacketize(packet, [2, 8, 2, 2, 4, 4, 4, 4, 4, 1, 1, 6], SilverSensor_40b)
-        if n.uid == 255:
-            return
-        temp = 16 ** 2 * n.temp2 + 16 * n.temp1 + n.temp0
-        humidity = 16 * n.rh1 + n.rh0
-        if temp > 1000:
-            temp %= 1000
-            temp += 100
-        temp = ((temp / 10) - 32) * 5 / 9
-        success = True
-    elif len(packet.bits) == 36:
+    if len(packet.bits) == 36:
         n = depacketize(packet, [4, 8, 2, 1, 1, 12, 8], SilverSensor_36b)
         temp = n.temp
         if temp >= 3840:

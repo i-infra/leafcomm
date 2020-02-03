@@ -3,14 +3,11 @@ import atexit
 import base64
 import functools
 import inspect
-import itertools
-import json
 import logging
 import multiprocessing
 import os
 import re
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -20,11 +17,14 @@ from typing import Any, Callable
 import aiohttp
 import aiohttp.web
 import aioredis
+import blosc
 import cbor
 import nacl
 import nacl.hash
 import nacl.public
+import numpy
 import ulid2
+
 
 import _constants
 import cacheutils
@@ -44,22 +44,32 @@ VERBOSE_REDIS = bool(os.getenv("VERBOSE_REDIS") or "--verbose_redis" in sys.argv
 CURRENT_FILE = globals().get("__file__") or ""
 
 
-def diag():
-    return {
-        "pyvers": sys.hexversion,
-        "exec": sys.executable,
-        "pid": os.getpid(),
-        "cwd": os.getcwd(),
-        "prefix": sys.exec_prefix,
-        "sys.path": sys.path,
-    }
-
-
 get_function_name = lambda depth=0: sys._getframe(depth + 1).f_code.co_name
 ip_regex = re.compile("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")
 linker = [
     x for x in open("/proc/%s/maps" % os.getpid()).read().split("\n") if "ld" in x
 ][0].split()[-1]
+
+
+def compress(in_):
+    return dict(
+        size=in_.size,
+        dtype=in_.dtype.str,
+        data=blosc.compress_ptr(
+            in_.__array_interface__["data"][0],
+            in_.size,
+            in_.dtype.itemsize,
+            clevel=1,
+            shuffle=blosc.BITSHUFFLE,
+            cname="lz4",
+        ),
+    )
+
+
+def decompress(size: int, dtype: str, data: bytes, **kwargs) -> numpy.ndarray:
+    out = numpy.empty(size, dtype)
+    blosc.decompress_ptr(data, out.__array_interface__["data"][0])
+    return out
 
 
 def any_false(maybe_false, my_array):
@@ -146,15 +156,8 @@ def multi_spawner(function_or_coroutine, cpu_index=0, forever=False):
 
 
 def native_spawn(
-    x,
-    timeout=30,
-    no_return=False,
-    loop=False,
-    namespace=None,
-    stdin_input=None,
-    linker=False,
+    x, timeout=30, no_return=False, loop=False, stdin_input=None, linker=False,
 ):
-    " carefully spawn a native command in an optional namespace, returning the contents of stdout and the process "
     if isinstance(x, str):
         x = [x]
     maybe_exec = which(x[0])
@@ -334,17 +337,21 @@ async def get_ticks(connection=None, key=f"{redis_prefix}_f_ticks"):
     return {x: float(y) for (x, y) in resp.items()}
 
 
-async def pseudopub(connection, channels, timestamp=None, reading=None):
+async def pseudopub(connection, channels, timestamp=None, reading=None, metadata=None):
     if isinstance(channels, str):
         channels = [channels]
     if not timestamp:
         timestamp = time.time()
     ulid = ulid2.generate_ulid_as_base32(timestamp=timestamp)
     data_tag = f"{data_tag_label}{ulid}"
-    await connection.set(data_tag, cbor.dumps(reading))
+    if isinstance(reading, numpy.ndarray):
+        reading = compress(reading)
+        reading["metadata"] = metadata
+        reading["pseudopub_compressed"] = True
+    encoded_reading = cbor.dumps(reading)
+    await connection.set(data_tag, encoded_reading, expire=600)
     for channel in channels:
         await connection.lpush(f"{redis_prefix}_{channel}", data_tag)
-    await connection.expireat(data_tag, int(timestamp + 600))
     return data_tag
 
 
@@ -361,7 +368,16 @@ async def pseudosub1(connection, channel, timeout=360):
             return EXIT
     obj_bytes = await connection.get(value)
     ulid = value.replace(data_tag_label.encode(), b"", 1)
-    return SerializedReading(ulid, obj_bytes)
+    value = cbor.loads(obj_bytes)
+    metadata = None
+    if (
+        isinstance(value, dict)
+        and "pseudopub_compressed" in value
+        and value["pseudopub_compressed"] == True
+    ):
+        metadata = value["metadata"]
+        value = decompress(**value)
+    return SerializedReading(ulid, value, metadata)
 
 
 async def tick_on_schedule(connection, timeout):
@@ -380,17 +396,15 @@ async def pseudosub(connection, channel, timeout=360, _depth_offset=0):
 
 
 class SerializedReading:
-    def __init__(self, ulid, cbor_bytes):
+    def __init__(self, ulid, value, metadata=None):
         if isinstance(ulid, bytes):
             self.ulid = ulid.decode()
         else:
             self.ulid = ulid
         assert isinstance(self.ulid, str)
-        if cbor_bytes != None:
-            self.value = cbor.loads(cbor_bytes)
-        else:
-            self.value = None
+        self.value = value
         self.timestamp = ulid2.get_ulid_timestamp(self.ulid)
+        self.metadata = metadata
 
 
 async def get_next_counter(counter_name, redis_connection):
