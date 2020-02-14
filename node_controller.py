@@ -1,6 +1,10 @@
+import asyncio
+import datetime
+
+import etek_codes
+import pattern_flipper2
 import sns_abstraction
 from node_core import *
-import asyncio
 
 IN = 1
 OUT = -1
@@ -26,14 +30,17 @@ class Actuator:
         self.name = actuator_name
 
 
+# TODO: add timeout, verification of commands by observing derivative change sign
+
+
 class BangBangWorker:
     def __init__(
         self,
         name="refridgerator controller",
         target_sensor=1279,
         target_units=ts_datastore.degc,
-        low=6,
-        high=8,
+        low=1,
+        high=2,
         actuator=None,
         redis_connection=None,
     ):
@@ -52,9 +59,10 @@ class BangBangWorker:
             description="electric motor compressing a gas and pumping heat from a system",
             system_name="refridgerator",
         )
-        self.key_name = f"{name}@{target_sensor}({low},{high})x{self.actuator.name}"
+        self.key_name = f"{name}@{target_sensor}-{self.actuator.name}"
         self.logger = get_logger(self.key_name)
         self.last_updated = 0
+        self.outlet_code = etek_codes.codes_0203[2]
         asyncio.create_task(self.set_state(DEFAULT_STATE))
 
     async def get_state(self):
@@ -64,6 +72,10 @@ class BangBangWorker:
 
     async def set_state(self, value):
         self.logger.debug(f"setting state: {value}")
+        await pattern_flipper2.push_message_fl2000(
+            pattern_flipper2.build_message_outlet_fl2000(self.outlet_code, value),
+            redis_connection=self.redis_connection,
+        )
         return await self.redis_connection.set(self.key_name, value)
 
     async def update_state(self, sensor_reading):
@@ -76,10 +88,10 @@ class BangBangWorker:
             tempDegF = int(value * 9 / 5 + 32)
             self.logger.info(f"compressor_on: {compressor_on}, temp: {tempDegF}degF")
             if value > self.high and not compressor_on:
-                sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning on. {ts}")
+                # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning on. {ts}")
                 return True
             if value < self.low and compressor_on:
-                sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning off. {ts}")
+                # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning off. {ts}")
                 return False
 
 
@@ -103,3 +115,21 @@ async def run_controls(loop=None):
             # native_spawn(["sunxi-pio", "-m", f"PB9={command_value},2"])
             # open("command.value", "w").write(f"{command_value}")
             await bbw.set_state(command_value)
+
+
+async def wait_for(dt):
+    # sleep until the specified datetime
+    while True:
+        now = datetime.datetime.now()
+        remaining = (dt - now).total_seconds()
+        if remaining < 86400:
+            break
+        # asyncio.sleep doesn't like long sleeps, so don't sleep more
+        # than a day at a time
+        await asyncio.sleep(86400)
+    await asyncio.sleep(remaining)
+
+
+async def run_at(dt, coro):
+    await wait_for(dt)
+    return await coro

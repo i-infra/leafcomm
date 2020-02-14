@@ -1,6 +1,6 @@
 import asyncio
-import atexit
 import base64
+import errno
 import functools
 import inspect
 import logging
@@ -24,7 +24,6 @@ import nacl.hash
 import nacl.public
 import numpy
 import ulid2
-
 
 import _constants
 import cacheutils
@@ -306,6 +305,46 @@ async def init_redis(
         return redis_connection
 
 
+
+
+def pid_exists(pid):
+    """Check whether pid exists in the current process table.
+    UNIX only.
+    """
+    if pid < 0:
+        return False
+    if pid == 0:
+        # According to "man 2 kill" PID 0 refers to every process
+        # in the process group of the calling process.
+        # On certain systems 0 is a valid PID but we have no way
+        # to know that in a portable fashion.
+        raise ValueError("invalid PID 0")
+    try:
+        os.kill(pid, 0)
+    except OSError as err:
+        if err.errno == errno.ESRCH:
+            # ESRCH == No such process
+            return False
+        elif err.errno == errno.EPERM:
+            # EPERM clearly means there's a process to deny access to
+            return True
+        else:
+            # According to "man 2 kill" possible error values are
+            # (EINVAL, EPERM, ESRCH)
+            raise
+    else:
+        return True
+
+
+async def check_redis(redis_socket_path="/tmp/redis.sock"):
+    try:
+        redis_connection = await init_redis(redis_socket_path=redis_socket_path)
+        await redis_connection.ping()
+        return True
+    except:
+        return False
+
+
 def start_redis_server(redis_socket_path="/tmp/redis.sock"):
     " configures and launches an ephemeral redis instance listening at a specified redis_socket_path "
     conf = f"""port 0
@@ -316,18 +355,23 @@ maxmemory-policy volatile-lru
 save ''
 pidfile {redis_socket_path}.pid
 daemonize yes""".encode()
-    pid_path = "{redis_socket_path}.pid"
+    pid_path = f"{redis_socket_path}.pid"
     already_running = False
+    maybe_pid = None
     if os.path.exists(pid_path):
         maybe_pid = int(open(pid_path).read().strip())
-        if os.path.exists(f"/proc/{maybe_pid}/maps"):
+        if pid_exists(maybe_pid):
             already_running = True
     if not already_running:
-        resp, proc = native_spawn(["redis-server", "-"], stdin_input=conf, timeout=5)
-        atexit.register(proc.terminate)
-    else:
+        already_running = asyncio.run(check_redis(redis_socket_path))
+    if already_running:
+        get_logger().info(
+            f"redis-server already running at {redis_socket_path} with PID {maybe_pid}!"
+        )
         return True
-    return proc
+    else:
+        resp, proc = native_spawn(["redis-server", "-"], stdin_input=conf, timeout=5)
+        return proc
 
 
 async def get_ticks(connection=None, key=f"{redis_prefix}_f_ticks"):
@@ -368,7 +412,10 @@ async def pseudosub1(connection, channel, timeout=360):
             return EXIT
     obj_bytes = await connection.get(value)
     ulid = value.replace(data_tag_label.encode(), b"", 1)
-    value = cbor.loads(obj_bytes)
+    if obj_bytes != None:
+        value = cbor.loads(obj_bytes)
+    else:
+        value = None
     metadata = None
     if (
         isinstance(value, dict)
@@ -384,14 +431,30 @@ async def tick_on_schedule(connection, timeout):
     return await pseudosub(connection, None, timeout, _depth_offset=1)
 
 
-async def pseudosub(connection, channel, timeout=360, _depth_offset=0):
+async def pseudosub(
+    connection, channel, timeout=360, _depth_offset=0, ignore_exit=False, do_ticks=True
+):
+    pending = set()
     while True:
-        res = await pseudosub1(connection, channel, timeout)
-        caller_name = get_function_name(1 + _depth_offset)
-        await connection.hset(f"{redis_prefix}_f_ticks", caller_name, time.time())
-        if res == EXIT:
+        if timeout < 1:
+            if not len(pending):
+                pending = {asyncio.create_task(pseudosub1(connection, channel))}
+            done, pending = await asyncio.wait(
+                pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            if len(done):
+                task = done.pop()
+                res = task.result()
+            else:
+                res = None
+        else:
+            res = await pseudosub1(connection, channel, timeout)
+        if res != None and do_ticks == True:
+            caller_name = get_function_name(1 + _depth_offset)
+            await connection.hset(f"{redis_prefix}_f_ticks", caller_name, time.time())
+        if res == EXIT and not ignore_exit:
             break
-        elif res != None:
+        else:
             yield res
 
 

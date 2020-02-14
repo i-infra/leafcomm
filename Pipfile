@@ -19,6 +19,7 @@ scipy = "*"
 "ulid2" = "*"
 boto3 = "*"
 pint = "*"
+arrow = {git = "https://github.com/crsmithdev/arrow"}
 
 [scripts]
 lint = "bash scripts/lint"
