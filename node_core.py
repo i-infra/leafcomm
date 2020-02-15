@@ -466,6 +466,8 @@ async def block_to_sample() -> typing.Awaitable[None]:
      * updates expirations of analog data block """
     connection = await init_redis()
     async for reading in pseudosub(connection, "transmissions"):
+        if (reading == None) or isinstance(reading.value, type(None)):
+            continue
         sample = None
         for filter_func in filters:
             pulses = block_to_pulses(reading, filter_func)
