@@ -9,8 +9,9 @@ import cairocffi as cairo
 import pycha.line
 import pycha.scatter
 import ts_datastore
+from palettable.matplotlib import Viridis_10
 
-sensor_colors = ["#70B336", "#7CEAFF", "#CFA8FF", "#FFABCB", "#661479"]
+sensor_colors = Viridis_10.hex_colors
 opacity = "80"
 sensor_colors = [x + opacity for x in sensor_colors]
 datastore = ts_datastore.TimeSeriesDatastore(
@@ -22,7 +23,7 @@ def get_datasets(start=0, stop=-1, parameter="degc"):
     sensors = {}
     samples = datastore.get_measurements(start, stop)
     for sample in samples:
-        sample["sensor_uid"] = "sensor" + str(sample["sensor_uid"])
+        sample["sensor_uid"] = "sensor" + str(sample["sensor_uid"] | 2)
         if sample["units"] == parameter:
             value = (sample["timestamp"] - start, sample["value"] * 9 / 5 + 32)
             if sample["sensor_uid"] not in sensors.keys():

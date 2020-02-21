@@ -16,6 +16,7 @@ class Actuator:
     def __init__(
         self,
         direction,
+        default_state,
         work_units,
         flow_measurement,
         actuator_name,
@@ -23,6 +24,7 @@ class Actuator:
         system_name,
     ):
         self.direction = direction
+        self.default_state = default_state
         self.input_unit, self.output_unit = work_units
         if flow_measurement:
             raise NotImplementedError("flow measurement is not yet implemented")
@@ -37,12 +39,13 @@ class Actuator:
 class BangBangWorker:
     def __init__(
         self,
-        name="refridgerator controller",
+        name="bang-bang controller",
         actuator=None,
         target_sensor=1279,
         target_units=ts_datastore.degc,
         low=1,
         high=2,
+        target_outlet_index=2,
         redis_connection=None,
     ):
         self.name = name
@@ -54,10 +57,11 @@ class BangBangWorker:
         self.redis_connection = redis_connection
         self.key_name = f"{name}@{target_sensor}-{self.actuator.name}"
         self.logger = get_logger(self.key_name)
-        self.last_updated = 0
-        self.last_command = 0
-        self.outlet_code = etek_codes.codes_0203[2]
-        asyncio.create_task(self.set_state(DEFAULT_STATE))
+        self.last_update_ts = None
+        self.last_command_ts = None
+        self.last_command_value = None
+        self.outlet_code = etek_codes.codes_0203[target_outlet_index]
+        asyncio.create_task(self.set_state(self.actuator.default_state))
 
     async def get_state(self):
         state = await self.redis_connection.get(self.key_name)
@@ -66,52 +70,52 @@ class BangBangWorker:
 
     async def set_state(self, value):
         self.logger.debug(f"setting state: {value}")
+        self.last_command_value = value
         await pattern_flipper2.push_message_fl2000(
             pattern_flipper2.build_message_outlet_fl2000(self.outlet_code, value),
             redis_connection=self.redis_connection,
         )
-        return await self.redis_connection.set(self.key_name, value)
+        return await self.redis_connection.set(self.key_name, int(value))
 
     async def update_state(self, sensor_reading):
         ts, ulid = sensor_reading.timestamp, sensor_reading.ulid
         _, sensor_uid, units, value = sensor_reading.value
-        if sensor_uid == self.target_sensor and units == self.target_units:
-            self.last_updated = ts
-            state_from_redis = (await self.get_state()) or False
-            compressor_on = bool(int(state_from_redis))
-            tempDegF = int(value * 9 / 5 + 32)
-            self.logger.info(f"compressor_on: {compressor_on}, temp: {tempDegF}degF")
-            if value > self.high and not compressor_on:
-                # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning on. {ts}")
-                return True
-            if value < self.low and compressor_on:
-                # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning off. {ts}")
-                return False
+        # bail if update isn't for us
+        if sensor_uid != self.target_sensor or units != self.target_units:
+            return
+        self.last_update_ts = ts
+        state_from_redis = (await self.get_state()) or False
+        currently_on = bool(int(state_from_redis))
+        tempDegF = int(value * 9 / 5 + 32)
+        self.logger.info(f"currently_on: {currently_on}, temp: {tempDegF}degF")
+        if value > self.high and not currently_on:
+            # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning on. {ts}")
+            return True
+        if value < self.low and currently_on:
+            # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning off. {ts}")
+            return False
+        # if currently_on and (ts - self.last_command_ts) > 600 and (value - self.last_command_value)
 
 
-async def calculate_controls(loop=None):
+async def run_fridge_controller(loop=None):
     redis_connection = await init_redis("")
     compressor = Actuator(
-        direction=IN,
+        actuator_name="compressor",
+        direction=OUT,  # compressor pumps heat (measured as temperature) out of system
+        default_state=L,  # default state is off
         work_units=("watts", "temperature"),
         flow_measurement=False,
-        actuator_name="compressor",
         description="electric motor compressing a gas and pumping heat from a system",
         system_name="refridgerator",
     )
-    fridge_controller = BangBangWorker(redis_connection=await init_redis(), actuator = compressor)
+    fridge_controller = BangBangWorker(
+        redis_connection=await init_redis(), actuator=compressor
+    )
     async for reading in pseudosub(redis_connection, "feedback_channel"):
-        results = await fridge_controller.update_state(reading)
-        if results != None:
-            await pseudopub(redis_connection, ["feedback_commands"], None, results)
-
-
-async def command_controls(loop=None):
-    redis_connection = await init_redis()
-    async for command in pseudosub(redis_connection, "feedback_commands"):
-        if command != None:
-            command_value = int(bool(command.value))
-            await bbw.set_state(command_value)
+        target_state = await fridge_controller.update_state(reading)
+        if target_state != None:
+            await fridge_controller.set_state(target_state)
+            # await pseudopub(redis_connection, ["feedback_commands"], None, target_state)
 
 
 async def wait_for(dt):

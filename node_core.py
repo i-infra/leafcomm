@@ -61,7 +61,7 @@ class Pulses:
 
 
 def printer(xs):
-    return "".join([{L: "░", H: "█"}[x] if x in (L,H) else "╳" for x in xs])
+    return "".join([{L: "░", H: "█"}[x] if x in (L, H) else "╳" for x in xs])
 
 
 def brickwall(xs):
@@ -745,8 +745,7 @@ def main():
         process_iq_readings,
         sample_to_datastore,
         sensor_monitor,
-        node_controller.calculate_controls,
-        node_controller.command_controls,
+        node_controller.run_fridge_controller,
     )
     proc_mapping = {}
     while not EXIT_NOW:

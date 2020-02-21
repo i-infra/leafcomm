@@ -20,6 +20,7 @@ scipy = "*"
 boto3 = "*"
 pint = "*"
 arrow = {git = "https://github.com/crsmithdev/arrow"}
+palettable = "*"
 
 [scripts]
 lint = "bash scripts/lint"
