@@ -61,7 +61,7 @@ class Pulses:
 
 
 def printer(xs):
-    return "".join([{L: "░", H: "█", E: "╳"}[x] for x in xs])
+    return "".join([{L: "░", H: "█"}[x] if x in (L,H) else "╳" for x in xs])
 
 
 def brickwall(xs):
