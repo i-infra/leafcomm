@@ -7,11 +7,10 @@ import ssl
 import sys
 import time
 
-import aiohttp
-from aiohttp import web
-
 import _constants
+import aiohttp
 import user_datastore
+from aiohttp import web
 from node_comms import *
 
 logger = get_logger(__name__, debug="--debug" in sys.argv)
@@ -210,8 +209,9 @@ async def set_alerts(request):
     )
 
 
-def create_app(loop):
+def create_app():
     async def start_background_tasks(app):
+        loop = asyncio.get_event_loop()
         app["redis"] = await init_redis("proxy")
         protocol = ProxyDatagramProtocol(loop, await init_redis("proxy"))
         app["udp_task"] = loop.create_task(
@@ -240,8 +240,7 @@ if __name__ == "__main__":
         redis_socket_path=data_dir + "proxysproutwave.sock"
     )
     time.sleep(5)
-    loop = asyncio.get_event_loop()
-    app = create_app(loop)
+    app = create_app()
     if _constants.upstream_protocol == "https":
         context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         context.load_cert_chain(

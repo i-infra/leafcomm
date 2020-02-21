@@ -14,10 +14,12 @@ import time
 import traceback
 from typing import Any, Callable
 
+import _constants
 import aiohttp
 import aiohttp.web
 import aioredis
 import blosc
+import cacheutils
 import cbor
 import nacl
 import nacl.hash
@@ -25,16 +27,13 @@ import nacl.public
 import numpy
 import ulid2
 
-import _constants
-import cacheutils
-
 PUBKEY_SIZE = nacl.public.PublicKey.SIZE
 COUNTER_WIDTH = 4
 CURRENT_PROTOCOL_VERSION = 1
 data_tag_label = "__"
 redis_prefix = "sproutwave"
 data_dir = os.path.expanduser("~/.sproutwave/")
-EXIT = b"EXIT"
+EXIT_VALUE = b"EXIT"
 EXIT_KEY = f"{redis_prefix}_exit"
 uvloop = None
 
@@ -305,8 +304,6 @@ async def init_redis(
         return redis_connection
 
 
-
-
 def pid_exists(pid):
     """Check whether pid exists in the current process table.
     UNIX only.
@@ -407,9 +404,9 @@ async def pseudosub1(connection, channel, timeout=360):
         return None
     else:
         channel, value = maybe_value
-        if value == EXIT:
-            await connection.lpush(EXIT_KEY, EXIT)
-            return EXIT
+        if value == EXIT_VALUE:
+            await connection.lpush(EXIT_KEY, EXIT_VALUE)
+            return EXIT_VALUE
     obj_bytes = await connection.get(value)
     ulid = value.replace(data_tag_label.encode(), b"", 1)
     if obj_bytes != None:
@@ -428,13 +425,16 @@ async def pseudosub1(connection, channel, timeout=360):
 
 
 async def tick_on_schedule(connection, timeout):
-    return await pseudosub(connection, None, timeout, _depth_offset=1)
+    async for x in pseudosub(connection, None, timeout, _depth_offset=1):
+        yield x
 
 
 async def pseudosub(
     connection, channel, timeout=360, _depth_offset=0, ignore_exit=False, do_ticks=True
 ):
     pending = set()
+    caller_name = get_function_name(1 + _depth_offset)
+    logger = get_logger(application_name=caller_name)
     while True:
         if timeout < 1:
             if not len(pending):
@@ -449,10 +449,10 @@ async def pseudosub(
                 res = None
         else:
             res = await pseudosub1(connection, channel, timeout)
-        if res != None and do_ticks == True:
-            caller_name = get_function_name(1 + _depth_offset)
+        if do_ticks == True:
             await connection.hset(f"{redis_prefix}_f_ticks", caller_name, time.time())
-        if res == EXIT and not ignore_exit:
+        if res == EXIT_VALUE and not ignore_exit:
+            logger.info(f"{channel}: quitting")
             break
         else:
             yield res

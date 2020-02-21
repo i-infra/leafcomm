@@ -20,11 +20,5 @@ for fname in [fname for fname in sys.argv[1::] if "--" not in fname]:
     elif f[0] == 0xA3:  # cbor encoded compressed numpy array
         uid = ulid2.generate_ulid_as_base32()
         reading = SerializedReading(uid, decompress(**cbor.loads(f)))
-    for f_ in [brickwall, lowpass]:
-        pulses = block_to_pulses(reading, f_)
-        packet_possibilities = []
-        for packet in list(demodulator(pulses)):
-            for decoder in [silver_sensor_decoder, etekcity_zap_decoder]:
-                packet_possibilities += [decoder(packet)]
-        for possibility in set(packet_possibilities):
-            print(possibility)
+    for result in process_iq_reading(reading):
+        print(result)

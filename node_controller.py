@@ -4,6 +4,7 @@ import datetime
 import etek_codes
 import pattern_flipper2
 import sns_abstraction
+import ts_datastore
 from node_core import *
 
 IN = 1
@@ -37,11 +38,11 @@ class BangBangWorker:
     def __init__(
         self,
         name="refridgerator controller",
+        actuator=None,
         target_sensor=1279,
         target_units=ts_datastore.degc,
         low=1,
         high=2,
-        actuator=None,
         redis_connection=None,
     ):
         self.name = name
@@ -51,17 +52,10 @@ class BangBangWorker:
         self.target_units = target_units
         self.actuator = actuator
         self.redis_connection = redis_connection
-        self.actuator = Actuator(
-            direction=IN,
-            work_units=("watts", "temperature"),
-            flow_measurement=False,
-            actuator_name="compressor",
-            description="electric motor compressing a gas and pumping heat from a system",
-            system_name="refridgerator",
-        )
         self.key_name = f"{name}@{target_sensor}-{self.actuator.name}"
         self.logger = get_logger(self.key_name)
         self.last_updated = 0
+        self.last_command = 0
         self.outlet_code = etek_codes.codes_0203[2]
         asyncio.create_task(self.set_state(DEFAULT_STATE))
 
@@ -95,25 +89,28 @@ class BangBangWorker:
                 return False
 
 
-async def run_alerts(loop=None):
+async def calculate_controls(loop=None):
     redis_connection = await init_redis("")
-    bbw = BangBangWorker(redis_connection=await init_redis(""))
+    compressor = Actuator(
+        direction=IN,
+        work_units=("watts", "temperature"),
+        flow_measurement=False,
+        actuator_name="compressor",
+        description="electric motor compressing a gas and pumping heat from a system",
+        system_name="refridgerator",
+    )
+    fridge_controller = BangBangWorker(redis_connection=await init_redis(), actuator = compressor)
     async for reading in pseudosub(redis_connection, "feedback_channel"):
-        results = await bbw.update_state(reading)
+        results = await fridge_controller.update_state(reading)
         if results != None:
-            logger.debug(f"alerter_results {results}")
             await pseudopub(redis_connection, ["feedback_commands"], None, results)
 
 
-async def run_controls(loop=None):
-    redis_connection = await init_redis("")
-    bbw = BangBangWorker(redis_connection=await init_redis(""))
+async def command_controls(loop=None):
+    redis_connection = await init_redis()
     async for command in pseudosub(redis_connection, "feedback_commands"):
         if command != None:
             command_value = int(bool(command.value))
-            logger.debug(f"command_value {command_value}")
-            # native_spawn(["sunxi-pio", "-m", f"PB9={command_value},2"])
-            # open("command.value", "w").write(f"{command_value}")
             await bbw.set_state(command_value)
 
 

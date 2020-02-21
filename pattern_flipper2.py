@@ -1,4 +1,5 @@
-from node_core import *
+from binary_ops import *
+from node_comms import *
 
 FL2000_SAMPLE_RATE = 10_000_000
 FPS = 10
@@ -52,7 +53,13 @@ async def start_flip_fl2000(reader, writer, loop, redis_connection):
     for _ in range(2):
         writer.write(empty_frame)
         await writer.drain()
-    async for message in pseudosub(redis_connection, "fl2000_bytes", timeout=timeout, ignore_exit = True, do_ticks = False):
+    async for message in pseudosub(
+        redis_connection,
+        "fl2000_bytes",
+        timeout=timeout,
+        ignore_exit=True,
+        do_ticks=False,
+    ):
         blob = empty_frame
         now = time.time()
         if isinstance(message, SerializedReading):
