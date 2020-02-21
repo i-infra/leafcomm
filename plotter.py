@@ -6,7 +6,6 @@ import sys
 import time
 
 import cairocffi as cairo
-
 import pycha.line
 import pycha.scatter
 import ts_datastore

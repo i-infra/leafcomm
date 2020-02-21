@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 
 import nacl.pwhash
-
 from enforce_types import enforce_types
 
 
