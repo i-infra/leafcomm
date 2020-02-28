@@ -33,6 +33,7 @@ CURRENT_PROTOCOL_VERSION = 1
 data_tag_label = "__"
 redis_prefix = "sproutwave"
 data_dir = os.path.expanduser("~/.sproutwave/")
+DEFAULT_REDIS_SOCKET_PATH = f"{data_dir}/{redis_prefix}.sock"
 EXIT_VALUE = b"EXIT"
 EXIT_KEY = f"{redis_prefix}_exit"
 uvloop = None
@@ -284,19 +285,15 @@ class CreateVerboseRedis:
 
 
 async def init_redis(
-    preface="",
-    default_filename="sproutwave.sock",
     redis_socket_path=None,
-    encoding=None,
 ):
-    if redis_socket_path == None:
-        redis_socket_path = f"{data_dir}/{preface}{default_filename}"
+    redis_socket_path = redis_socket_path or DEFAULT_REDIS_SOCKET_PATH
     " creates an aioredis connection to a redis instance listening on a specified unix socket "
     if not aioredis:
         raise Exception("aioredis not found!")
     loop = asyncio.get_event_loop()
     redis_connection = await aioredis.create_redis(
-        redis_socket_path, loop=loop, encoding=encoding
+        redis_socket_path, loop=loop
     )
     if VERBOSE_REDIS:
         return CreateVerboseRedis(redis_connection, verbose=VERBOSE_REDIS, loop=loop)
@@ -342,7 +339,7 @@ async def check_redis(redis_socket_path="/tmp/redis.sock"):
         return False
 
 
-def start_redis_server(redis_socket_path="/tmp/redis.sock"):
+def start_redis_server(redis_socket_path=DEFAULT_REDIS_SOCKET_PATH):
     " configures and launches an ephemeral redis instance listening at a specified redis_socket_path "
     conf = f"""port 0
 databases 1
@@ -368,14 +365,9 @@ daemonize yes""".encode()
         return True
     else:
         resp, proc = native_spawn(["redis-server", "-"], stdin_input=conf, timeout=5)
+        time.sleep(5)
         return proc
 
-
-async def get_ticks(connection=None, key=f"{redis_prefix}_f_ticks"):
-    if connection == None:
-        connection = await init_redis()
-    resp = await connection.hgetall(key)
-    return {x: float(y) for (x, y) in resp.items()}
 
 
 async def pseudopub(connection, channels, timestamp=None, reading=None, metadata=None):
@@ -425,6 +417,7 @@ async def pseudosub1(connection, channel, timeout=360):
 
 
 async def tick_on_schedule(connection, timeout):
+    yield
     async for x in pseudosub(connection, None, timeout, _depth_offset=1):
         yield x
 

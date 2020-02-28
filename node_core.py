@@ -1,21 +1,24 @@
 import asyncio
-import atexit
 import dataclasses
 import json
 import os
-import pathlib
 import statistics
 import sys
 import time
 import typing
 
-import _constants
-import bottleneck
-import node_controller
+import xxhash
 import numpy
 import scipy
+import bottleneck
+
+import _constants
+import node_controller
+import pattern_streamer
 import ts_datastore
 import fir_coef
+
+
 from binary_ops import *
 from node_comms import *
 from scipy.signal import butter, freqz, lfilter
@@ -23,8 +26,8 @@ from scipy.signal import butter, freqz, lfilter
 RTLSDR_SAMPLE_RATE = 256_000
 L, H = 0, 1
 logger = get_logger(__name__, debug="--debug" in sys.argv)
-global EXIT_NOW
-EXIT_NOW = False
+
+# exit / cleanup vars
 EXIT_VALUE = b"EXIT"
 EXIT_KEY = f"{redis_prefix}_exit"
 
@@ -365,7 +368,7 @@ def demodulator(pulses: Pulses) -> typing.Iterable[Packet]:
                 if len(symbols) > 10:
                     yield Packet(symbols, length_clusters, pulse_group, pulses.ulid)
                 symbols = []
-        logger.info(f"{len(symbols)} {printer(symbols)}")
+        logger.debug(f"demoded {len(symbols)} {printer(symbols)}")
         if len(symbols) > 10:
             yield Packet(symbols, length_clusters, pulse_group, pulses.ulid)
 
@@ -686,78 +689,3 @@ async def sensor_monitor(connection=None, tick_time=60):
         logger.info(json.dumps(sensor_stats))
 
 
-async def watchdog(connection=None, threshold=600, key="sproutwave_f_ticks"):
-    """ run until it's been more than 600 seconds since all blocks ticked, then exit, signaling time for re-init """
-    timeout = 600
-    tick_cycle = 120
-    if connection == None:
-        connection = await init_redis()
-    # clear f_ticks
-    await connection.delete(key)
-    logger = get_logger()
-    async for _ in tick_on_schedule(connection, tick_cycle):
-        now = time.time()
-        ticks = await get_ticks(connection, key=key)
-        process_stats = dict(stats={}, timestamp=int(now))
-        for name, timestamp in ticks.items():
-            process_stats["stats"][name.decode()] = int(now - timestamp)
-        logger.info(json.dumps(process_stats))
-        if any([(now - timestamp) > timeout for timestamp in ticks.values()]):
-            await connection.delete(key)
-            raise TimeoutError("Watchdog detected timeout.")
-
-
-def time_to_exit(signalnum, frame):
-    global EXIT_NOW
-
-    async def indicate_exit():
-        connection = await init_redis()
-        await connection.lpush(EXIT_KEY, EXIT_VALUE)
-        await connection.lpush(EXIT_KEY, EXIT_VALUE)
-        await connection.lpush(EXIT_KEY, EXIT_VALUE)
-
-    multi_spawner(indicate_exit).join()
-    EXIT_NOW = True
-
-
-def cleanup_exit():
-    global EXIT_NOW
-
-    async def cleanup_exit():
-        connection = await init_redis()
-        return await connection.delete(EXIT_KEY)
-
-    if EXIT_NOW:
-        multi_spawner(cleanup_exit).join()
-
-
-def main():
-    pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
-    signal.signal(signal.SIGINT, time_to_exit)
-    atexit.register(cleanup_exit)
-    redis_server_process = start_redis_server(
-        redis_socket_path=f"{data_dir}sproutwave.sock"
-    )
-    # TODO: replace time.sleep with polling for redis, or have start_redis_server do so...
-    time.sleep(5)
-    funcs = (
-        rtlsdr_threshold_and_accumulate,
-        process_iq_readings,
-        sample_to_datastore,
-        sensor_monitor,
-        node_controller.run_fridge_controller,
-    )
-    proc_mapping = {}
-    while not EXIT_NOW:
-        for func in funcs:
-            name = func.__name__
-            logger.info("(re)starting %s" % name)
-            if name in proc_mapping.keys():
-                proc_mapping[name].terminate()
-            proc_mapping[name] = multi_spawner(func)
-        time.sleep(30)
-        multi_spawner(watchdog).join()
-
-
-if __name__ == "__main__":
-    main()
