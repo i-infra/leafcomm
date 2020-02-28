@@ -21,6 +21,7 @@ boto3 = "*"
 pint = "*"
 arrow = {git = "https://github.com/crsmithdev/arrow"}
 palettable = "*"
+xxhash = "*"
 
 [scripts]
 lint = "bash scripts/lint"
@@ -30,3 +31,4 @@ pyqrcode = "*"
 aioconsole = "*"
 isort = "*"
 vulture = "*"
+bpython = "*"
