@@ -39,11 +39,13 @@ def cleanup_exit():
 
     multi_spawner(cleanup_exit).join()
 
+
 async def get_ticks(connection=None, key=f"{redis_prefix}_f_ticks"):
     if connection == None:
         connection = await init_redis()
     resp = await connection.hgetall(key)
     return {x: float(y) for (x, y) in resp.items()}
+
 
 async def main():
     pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
@@ -58,7 +60,7 @@ async def main():
         node_core.sample_to_datastore,
         node_core.sensor_monitor,
         node_controller.run_controllers,
-        pattern_streamer.start_fl2000_daemon
+        pattern_streamer.start_fl2000_daemon,
     )
     function_process_mapping = {}
     file_hash_mapping = {}
@@ -69,14 +71,19 @@ async def main():
             func_name = func.__name__
             func_file = inspect.getsourcefile(func)
             func_file_hash = xxhash.xxh64(open(func_file, "rb").read()).hexdigest()
-            func_changed = func_file in file_hash_mapping and file_hash_mapping[func_file] != func_file_hash
+            func_changed = (
+                func_file in file_hash_mapping
+                and file_hash_mapping[func_file] != func_file_hash
+            )
             func_module = inspect.getmodulename(func_file)
             if func_name in function_process_mapping:
                 func_alive = function_process_mapping[func_name].is_alive()
             else:
                 func_alive = False
             file_hash_mapping[func_file] = func_file_hash
-            logger.debug(f"{func_name} from {func_file} @ {func_file_hash}; alive: {func_alive}")
+            logger.debug(
+                f"{func_name} from {func_file} @ {func_file_hash}; alive: {func_alive}"
+            )
             if func_changed:
                 logger.info(
                     f"reloading {func_name} from {func_file.split('/')[-1]} @ {func_file_hash}"

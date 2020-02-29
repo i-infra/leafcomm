@@ -32,3 +32,4 @@ aioconsole = "*"
 isort = "*"
 vulture = "*"
 bpython = "*"
+black = {git = "https://github.com/psf/black"}

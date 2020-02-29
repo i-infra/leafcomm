@@ -7,10 +7,11 @@ import ssl
 import sys
 import time
 
-import _constants
 import aiohttp
-import user_datastore
 from aiohttp import web
+
+import _constants
+import user_datastore
 from node_comms import *
 
 logger = get_logger(__name__, debug="--debug" in sys.argv)

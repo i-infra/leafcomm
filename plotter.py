@@ -5,11 +5,12 @@ import os
 import sys
 import time
 
+from palettable.matplotlib import Viridis_10
+
 import cairocffi as cairo
 import pycha.line
 import pycha.scatter
 import ts_datastore
-from palettable.matplotlib import Viridis_10
 
 sensor_colors = Viridis_10.hex_colors
 opacity = "80"

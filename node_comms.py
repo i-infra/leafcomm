@@ -14,18 +14,19 @@ import time
 import traceback
 from typing import Any, Callable
 
-import _constants
 import aiohttp
 import aiohttp.web
 import aioredis
 import blosc
-import cacheutils
 import cbor
 import nacl
 import nacl.hash
 import nacl.public
 import numpy
 import ulid2
+
+import _constants
+import cacheutils
 
 PUBKEY_SIZE = nacl.public.PublicKey.SIZE
 COUNTER_WIDTH = 4
@@ -284,17 +285,13 @@ class CreateVerboseRedis:
         return do_work_with_logging
 
 
-async def init_redis(
-    redis_socket_path=None,
-):
+async def init_redis(redis_socket_path=None,):
     redis_socket_path = redis_socket_path or DEFAULT_REDIS_SOCKET_PATH
     " creates an aioredis connection to a redis instance listening on a specified unix socket "
     if not aioredis:
         raise Exception("aioredis not found!")
     loop = asyncio.get_event_loop()
-    redis_connection = await aioredis.create_redis(
-        redis_socket_path, loop=loop
-    )
+    redis_connection = await aioredis.create_redis(redis_socket_path, loop=loop)
     if VERBOSE_REDIS:
         return CreateVerboseRedis(redis_connection, verbose=VERBOSE_REDIS, loop=loop)
     else:
@@ -367,7 +364,6 @@ daemonize yes""".encode()
         resp, proc = native_spawn(["redis-server", "-"], stdin_input=conf, timeout=5)
         time.sleep(5)
         return proc
-
 
 
 async def pseudopub(connection, channels, timestamp=None, reading=None, metadata=None):

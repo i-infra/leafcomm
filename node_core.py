@@ -7,21 +7,19 @@ import sys
 import time
 import typing
 
-import xxhash
+import bottleneck
 import numpy
 import scipy
-import bottleneck
+import xxhash
+from scipy.signal import butter, freqz, lfilter
 
 import _constants
+import fir_coef
 import node_controller
 import pattern_streamer
 import ts_datastore
-import fir_coef
-
-
 from binary_ops import *
 from node_comms import *
-from scipy.signal import butter, freqz, lfilter
 
 RTLSDR_SAMPLE_RATE = 256_000
 L, H = 0, 1
@@ -687,5 +685,3 @@ async def sensor_monitor(connection=None, tick_time=60):
                 int(now - float(sensor_last_seen[uid])),
             ]
         logger.info(json.dumps(sensor_stats))
-
-

@@ -87,7 +87,7 @@ async def start_flip_fl2000(reader, writer, loop, redis_connection):
         if time_remaining > 0.001:
             await asyncio.sleep(time_remaining)
         avg_durations = numpy.mean(running_durations)
-        if ((now*10 // 1) % 100) == 1:
+        if ((now * 10 // 1) % 100) == 1:
             logger.info(f"avg rate: {rate}, {avg_durations}")
         if (after_write - last) / 2 > (1 / FPS):
             logger.debug(

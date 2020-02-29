@@ -1,6 +1,8 @@
 import asyncio
 import datetime
+
 import arrow
+
 import etek_codes
 import pattern_streamer
 import sns_abstraction
@@ -101,10 +103,16 @@ class BangBangWorker:
         if value < self.low and currently_on:
             # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning off. {ts}")
             return False
-        expected_sign = numpy.sign(self.actuator.direction*{False:-1.0,True:1.0}[currently_on])
-        if (ts - self.last_command_ts) > 180 and numpy.sign(self.derivative) != expected_sign:
-            logger.debug("detected incorrect actuator state, probably from a missed command - fixing")
-            #target_state = {self.actuator.direction: True, self.actuator.direction * -1: False}[expected_sign]
+        expected_sign = numpy.sign(
+            self.actuator.direction * {False: -1.0, True: 1.0}[currently_on]
+        )
+        if (ts - self.last_command_ts) > 180 and numpy.sign(
+            self.derivative
+        ) != expected_sign:
+            logger.debug(
+                "detected incorrect actuator state, probably from a missed command - fixing"
+            )
+            # target_state = {self.actuator.direction: True, self.actuator.direction * -1: False}[expected_sign]
             return currently_on
 
 
@@ -141,14 +149,20 @@ class AlerterWorker:
         if sensor_uid != self.target_sensor or units != self.target_units:
             return
         # startup deriv should be 0 not value
-        self.derivative = 0.1*self.derivative + 0.9*((value - (self.last_value or value))/(ts-self.last_update_ts))
+        self.derivative = 0.1 * self.derivative + 0.9 * (
+            (value - (self.last_value or value)) / (ts - self.last_update_ts)
+        )
         self.last_value = value
         self.last_update_ts = ts
         tempDegF = int(value * 9 / 5 + 32)
         self.logger.info(f"derivative: {self.derivative}, temp: {tempDegF}degF")
-        #last update ts
-        if ts - self.last_command_ts > 600 and ((value < self.low) or (value > self.high)):
-            sns_abstraction.send_as_sms(f"current temperature: {tempDegF}degF: alerting outside of {self.low} to {self.high}")
+        # last update ts
+        if ts - self.last_command_ts > 600 and (
+            (value < self.low) or (value > self.high)
+        ):
+            sns_abstraction.send_as_sms(
+                f"current temperature: {tempDegF}degF: alerting outside of {self.low} to {self.high}"
+            )
             self.last_command_value = value
             self.last_command_ts = time.time()
             self.last_command_deriv = self.derivative
@@ -157,11 +171,14 @@ class AlerterWorker:
 
 async def run_alerters():
     redis_connection = await init_redis("")
-    #TODO: load alerters from Redis
+    # TODO: load alerters from Redis
     alerter_redis_connection = await init_redis("")
     rc = alerter_redis_connection
-    alerters = [AlerterWorker(rc, target_sensor_uid=1221, low=28,high=30), AlerterWorker(rc, target_sensor_uid=1235, low=0,high=3)]
-    #TODO:replace upstream_channel with dedicated channel
+    alerters = [
+        AlerterWorker(rc, target_sensor_uid=1221, low=28, high=30),
+        AlerterWorker(rc, target_sensor_uid=1235, low=0, high=3),
+    ]
+    # TODO:replace upstream_channel with dedicated channel
     async for reading in pseudosub(redis_connection, "upstream_channel"):
         if reading == None or reading.value == None:
             continue
@@ -173,7 +190,7 @@ async def run_alerters():
 
 async def run_controllers():
     redis_connection = await init_redis("")
-    #TODO: load controllers from Redis
+    # TODO: load controllers from Redis
     compressor = Actuator(
         actuator_name="compressor",
         direction=OUT,  # compressor pumps heat (measured as temperature) out of system
@@ -193,12 +210,14 @@ async def run_controllers():
             if target_state != None:
                 await fridge_controller.set_state(target_state)
 
-async def send_outlet_command(outlet_index, value, redis_connection = None, outlet_codes = etek_codes.codes_0203):
+
+async def send_outlet_command(
+    outlet_index, value, redis_connection=None, outlet_codes=etek_codes.codes_0203
+):
     return await pattern_streamer.push_message_fl2000(
         pattern_streamer.build_message_outlet_fl2000(outlet_codes[outlet_index], value),
         redis_connection=redis_connection or await init_redis(""),
     )
-
 
 
 async def wait_for(dt):
