@@ -22,6 +22,9 @@ pint = "*"
 arrow = {git = "https://github.com/crsmithdev/arrow"}
 palettable = "*"
 xxhash = "*"
+recurrent = "*"
+dateutils = "*"
+pytimeparse = {git = "https://github.com/wroberts/pytimeparse"}
 
 [scripts]
 lint = "bash scripts/lint"

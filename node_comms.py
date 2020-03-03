@@ -412,9 +412,9 @@ async def pseudosub1(connection, channel, timeout=360):
     return SerializedReading(ulid, value, metadata)
 
 
-async def tick_on_schedule(connection, timeout):
+async def tick_on_schedule(connection, timeout, **kwargs):
     yield
-    async for x in pseudosub(connection, None, timeout, _depth_offset=1):
+    async for x in pseudosub(connection, None, timeout, _depth_offset=1, **kwargs):
         yield x
 
 

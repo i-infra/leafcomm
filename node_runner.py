@@ -75,7 +75,7 @@ async def main():
                 func_file in file_hash_mapping
                 and file_hash_mapping[func_file] != func_file_hash
             )
-            func_module = inspect.getmodulename(func_file)
+            func_module = inspect.getmodule(func)
             if func_name in function_process_mapping:
                 func_alive = function_process_mapping[func_name].is_alive()
             else:
@@ -86,12 +86,14 @@ async def main():
             )
             if func_changed:
                 logger.info(
-                    f"reloading {func_name} from {func_file.split('/')[-1]} @ {func_file_hash}"
+                    f"reloading {func_file.split('/')[-1]} ({func_module}) @ {func_file_hash}"
                 )
                 importlib.reload(func_module)
-            if func_changed:
                 function_process_mapping[func_name].terminate()
             if func_changed or not func_alive:
+                logger.info(
+                    f"launching {func_name} from {func_file.split('/')[-1]} (func_module) @ {func_file_hash}"
+                )
                 function_process_mapping[func_name] = multi_spawner(func)
 
 

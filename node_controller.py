@@ -2,9 +2,11 @@ import asyncio
 import datetime
 
 import arrow
-
+import dateutil.rrule
 import etek_codes
 import pattern_streamer
+import pytimeparse
+import recurrent
 import sns_abstraction
 import ts_datastore
 from node_core import *
@@ -33,9 +35,6 @@ class Actuator:
         self.description = description
         self.system_name = system_name
         self.name = actuator_name
-
-
-# TODO: add timeout, verification of commands by observing derivative change sign
 
 
 class BangBangWorker:
@@ -97,12 +96,13 @@ class BangBangWorker:
         currently_on = bool(int(state_from_redis))
         tempDegF = int(value * 9 / 5 + 32)
         self.logger.info(f"currently_on: {currently_on}, temp: {tempDegF}degF")
+        target = None
         if value > self.high and not currently_on:
             # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning on. {ts}")
-            return True
+            target = True
         if value < self.low and currently_on:
             # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning off. {ts}")
-            return False
+            target = False
         expected_sign = numpy.sign(
             self.actuator.direction * {False: -1.0, True: 1.0}[currently_on]
         )
@@ -113,7 +113,101 @@ class BangBangWorker:
                 "detected incorrect actuator state, probably from a missed command - fixing"
             )
             # target_state = {self.actuator.direction: True, self.actuator.direction * -1: False}[expected_sign]
-            return currently_on
+            target = currently_on
+        if target is not None:
+            await self.set_state(target)
+        return target
+
+
+
+
+class TimerWorker:
+    def __init__(
+        self,
+        redis_connection,
+        target_outlet_index,
+        rrule_on="every day at 10am",
+        rrule_off=None,
+        duration=None,
+    ):
+        self.redis_connection = redis_connection
+        rrulestr_parser = functools.partial(
+            dateutil.rrule._rrulestr()._parse_rfc,
+            dtstart=arrow.now().floor("hour").datetime,
+        )
+        if isinstance(rrule_on, str) and "RRULE" not in rrule_on:
+            rrule_str = recurrent.RecurringEvent().parse(rrule_on)
+            # specify a clean start time to enable timezone aware math between rrules and arrows
+            rrule_on = rrulestr_parser(rrule_str)
+        self.rrule_on = rrule_on
+        self.next_on = self.rrule_on.after(arrow.now())
+        self.rrule_off = rrule_off
+        if rrule_off and duration:
+            raise ValueError("Can't pass both an off-time and a duration!")
+        self.duration = duration
+        if duration and isinstance(duration, str):
+            self.duration = pytimeparse.parse(duration)
+            self.next_off = arrow.Arrow.fromdatetime(self.next_on).shift(
+                seconds=self.duration
+            )
+        if isinstance(rrule_off, str):
+            if "RRULE" not in rrule_off:
+                rrule_str = recurrent.RecurringEvent().parse(rrule_off)
+            else:
+                rrule_str = rrule_off
+            self.rrule_off = rrulestr_parser(rrule_str)
+            self.next_off = self.rrule_off.after(self.next_on)
+            self.duration = (self.next_off - self.next_on).seconds
+        self.target_outlet_index = target_outlet_index
+        self.outlet_code = etek_codes.codes_0203[target_outlet_index]
+        rrule_fragment = str(self.rrule_on).split("\n")[-1]
+        self.key_name = f"{rrule_fragment}+{self.duration}s@{target_outlet_index}"
+        self.logger = get_logger(self.key_name)
+        self.on_task = None
+        self.off_task = None
+        self.last_command_value = None
+        self.last_command_ts = 0
+        self.logger.info(f"inited timer! {self.rrule_on} {self.rrule_off} {duration}")
+
+    async def set_state(self, value):
+        self.logger.debug(f"setting state: {value}")
+        self.last_command_value = value
+        self.last_command_ts = time.time()
+        await pattern_streamer.push_message_fl2000(
+            pattern_streamer.build_message_outlet_fl2000(self.outlet_code, value),
+            redis_connection=self.redis_connection,
+        )
+        return await self.redis_connection.set(self.key_name, int(value))
+
+    async def update_state(self, sensor_reading=None):
+        if not self.on_task or self.on_task.done():
+            self.next_on = self.rrule_on.after(arrow.now())
+            self.on_task = asyncio.create_task(
+                run_at(self.next_on, self.set_state, True)
+            )
+            self.on_task.set_name(
+                f"outlet {self.target_outlet_index} on at {self.next_on}"
+            )
+            self.logger.info(f"created {self.on_task}")
+        if self.next_off is not None and (not self.off_task or self.off_task.done()):
+            if not self.last_command_ts and self.rrule_off:
+                self.next_off = self.rrule_off.after(self.next_on)
+            elif self.rrule_off is not None:
+                self.next_off = self.rrule_off.after(
+                    arrow.Arrow.fromtimestamp(self.last_command_ts)
+                )
+            elif self.duration is not None:
+                self.next_off = arrow.Arrow.fromdatetime(self.next_on).shift(
+                    seconds=self.duration
+                )
+            self.off_task = asyncio.create_task(
+                run_at(self.next_off, self.set_state, False)
+            )
+            self.off_task.set_name(
+                f"outlet {self.target_outlet_index} off at {self.next_off}"
+            )
+            self.logger.info(f"created {self.off_task}")
+        self.logger.debug(f"{self.on_task}, {self.off_task}")
 
 
 class AlerterWorker:
@@ -204,11 +298,33 @@ async def run_controllers():
         redis_connection=await init_redis(), actuator=compressor
     )
     controllers = [fridge_controller]
+    controllers += [
+        TimerWorker(
+            redis_connection=await init_redis(),
+            target_outlet_index=0,
+            rrule_on="daily at 10a",
+            rrule_off="daily at 2:30am",
+        )
+    ]
+    controllers += [
+        TimerWorker(
+            redis_connection=await init_redis(),
+            target_outlet_index=3,
+            rrule_on="daily at 10a",
+            rrule_off="daily at 2:30am",
+        )
+    ]
+    controllers += [
+        TimerWorker(
+            redis_connection=await init_redis(),
+            target_outlet_index=4,
+            rrule_on="daily at 8a",
+            duration="12h",
+        )
+    ]
     async for reading in pseudosub(redis_connection, "feedback_channel"):
         for controller in controllers:
-            target_state = await fridge_controller.update_state(reading)
-            if target_state != None:
-                await fridge_controller.set_state(target_state)
+            await controller.update_state(reading)
 
 
 async def send_outlet_command(
@@ -233,6 +349,6 @@ async def wait_for(dt):
     await asyncio.sleep(remaining)
 
 
-async def run_at(dt, coro):
+async def run_at(dt, coro, *args):
     await wait_for(dt)
-    return await coro
+    return await coro(*args)
