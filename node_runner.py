@@ -62,39 +62,46 @@ async def main():
         node_controller.run_controllers,
         pattern_streamer.start_fl2000_daemon,
     )
-    function_process_mapping = {}
-    file_hash_mapping = {}
+    function_process_map = {}
+    file_hash_map = {}
+    file_func_name_map = {}
     async for _ in tick_on_schedule(connection, timeout=120):
         now = time.time()
         function_ticks = await get_ticks(connection)
         for func in funcs:
             func_name = func.__name__
             func_file = inspect.getsourcefile(func)
+            if func_file in file_func_name_map:
+                if func_name not in file_func_name_map[func_file]:
+                    file_func_name_map[func_file].append(func_name)
+            else:
+                file_func_name_map[func_file] = [func_name]
             func_file_hash = xxhash.xxh64(open(func_file, "rb").read()).hexdigest()
-            func_changed = (
-                func_file in file_hash_mapping
-                and file_hash_mapping[func_file] != func_file_hash
+            file_changed = (
+                func_file in file_hash_map
+                and file_hash_map[func_file] != func_file_hash
             )
             func_module = inspect.getmodule(func)
-            if func_name in function_process_mapping:
-                func_alive = function_process_mapping[func_name].is_alive()
+            if func_name in function_process_map:
+                func_alive = function_process_map[func_name].is_alive()
             else:
                 func_alive = False
-            file_hash_mapping[func_file] = func_file_hash
+            file_hash_map[func_file] = func_file_hash
             logger.debug(
                 f"{func_name} from {func_file} @ {func_file_hash}; alive: {func_alive}"
             )
-            if func_changed:
+            if file_changed:
                 logger.info(
                     f"reloading {func_file.split('/')[-1]} ({func_module}) @ {func_file_hash}"
                 )
                 importlib.reload(func_module)
-                function_process_mapping[func_name].terminate()
-            if func_changed or not func_alive:
+                for to_terminate_name in file_func_name_map[func_file]:
+                    function_process_map[to_terminate_name].terminate()
+            if file_changed or not func_alive:
                 logger.info(
                     f"launching {func_name} from {func_file.split('/')[-1]} (func_module) @ {func_file_hash}"
                 )
-                function_process_mapping[func_name] = multi_spawner(func)
+                function_process_map[func_name] = multi_spawner(func)
 
 
 if __name__ == "__main__":
