@@ -11,8 +11,8 @@ import sns_abstraction
 import ts_datastore
 from node_core import *
 
-IN = 1
-OUT = -1
+INCREASES = IN = 1
+DECREASES = OUT = -1
 DEFAULT_STATE = 0
 
 
@@ -46,7 +46,7 @@ class BangBangWorker:
         target_units=ts_datastore.degc,
         low=1,
         high=2,
-        target_outlet_index=2,
+        target_outlet=(etek_codes.masters[203], 3),
         redis_connection=None,
     ):
         self.name = name
@@ -55,13 +55,16 @@ class BangBangWorker:
         self.target_sensor = target_sensor
         self.target_units = target_units
         self.actuator = actuator
-        self.redis_connection = redis_connection
+        self.redis_connection = None
         self.key_name = f"{name}@{target_sensor}-{self.actuator.name}"
         self.logger = get_logger(self.key_name)
         self.last_update_ts = None
         self.last_command_ts = None
         self.last_value = 0
-        self.outlet_code = etek_codes.codes_0203[target_outlet_index]
+        self.outlet_master, self.target_outlet_index = target_outlet
+        self.outlet_code = etek_codes.get_bitcode_from_master_and_index(
+            self.outlet_master, self.target_outlet_index
+        )
         asyncio.create_task(self.set_state(self.actuator.default_state))
 
     async def get_state(self):
@@ -70,6 +73,8 @@ class BangBangWorker:
         return state
 
     async def set_state(self, value):
+        if self.redis_connection == None:
+            self.redis_connection = await init_redis()
         self.logger.debug(f"setting state: {value}")
         self.last_command_value = value
         self.last_command_ts = time.time()
@@ -94,15 +99,20 @@ class BangBangWorker:
         self.last_value = value
         state_from_redis = (await self.get_state()) or False
         currently_on = bool(int(state_from_redis))
-        tempDegF = int(value * 9 / 5 + 32)
-        self.logger.info(f"currently_on: {currently_on}, temp: {tempDegF}degF")
+        if self.target_units == ts_datastore.degc:
+            tempDegF = int(value * 9 / 5 + 32)
+            self.logger.info(f"currently_on: {currently_on}, temp: {tempDegF}degF")
         target = None
-        if value > self.high and not currently_on:
-            # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning on. {ts}")
-            target = True
-        if value < self.low and currently_on:
-            # sns_abstraction.send_as_sms(f"temp: {tempDegF}degF, turning off. {ts}")
-            target = False
+        if self.actuator.direction == DECREASES:
+            if value > self.high and not currently_on:
+                target = True
+            if value < self.low and currently_on:
+                target = False
+        if self.actuator.direction == INCREASES:
+            if value > self.high and currently_on:
+                target = False
+            if value < self.low and not currently_on:
+                target = True
         expected_sign = numpy.sign(
             self.actuator.direction * {False: -1.0, True: 1.0}[currently_on]
         )
@@ -119,18 +129,14 @@ class BangBangWorker:
         return target
 
 
-
-
 class TimerWorker:
     def __init__(
         self,
-        redis_connection,
-        target_outlet_index,
+        target_outlet,
         rrule_on="every day at 10am",
         rrule_off=None,
         duration=None,
     ):
-        self.redis_connection = redis_connection
         rrulestr_parser = functools.partial(
             dateutil.rrule._rrulestr()._parse_rfc,
             dtstart=arrow.now().floor("hour").datetime,
@@ -156,17 +162,29 @@ class TimerWorker:
             else:
                 rrule_str = rrule_off
             self.rrule_off = rrulestr_parser(rrule_str)
-            self.next_off = self.rrule_off.after(self.next_on)
+            # NB: subtle difference vs passed as duration - duration turns off after turns on again, rrule_off starts now
+            self.next_off = self.rrule_off.after(arrow.now())
             self.duration = (self.next_off - self.next_on).seconds
-        self.target_outlet_index = target_outlet_index
-        self.outlet_code = etek_codes.codes_0203[target_outlet_index]
         rrule_fragment = str(self.rrule_on).split("\n")[-1]
-        self.key_name = f"{rrule_fragment}+{self.duration}s@{target_outlet_index}"
-        self.logger = get_logger(self.key_name)
         self.on_task = None
         self.off_task = None
         self.last_command_value = None
         self.last_command_ts = 0
+        self.outlet_master, self.target_outlet_index = target_outlet
+        self.outlet_code = etek_codes.get_bitcode_from_master_and_index(
+            self.outlet_master, self.target_outlet_index
+        )
+        self.redis_connection_initer = asyncio.create_task(init_redis())
+        self.redis_connection = None
+
+        def redis_connection_finished_initing(fut):
+            self.redis_connection = fut.result()
+
+        self.redis_connection_initer.add_done_callback(
+            redis_connection_finished_initing
+        )
+        self.key_name = f"{rrule_fragment}+{self.duration}s@{self.target_outlet_index}"
+        self.logger = get_logger(self.key_name)
         self.logger.info(f"inited timer! {self.rrule_on} {self.rrule_off} {duration}")
 
     async def set_state(self, value):
@@ -207,7 +225,6 @@ class TimerWorker:
                 f"outlet {self.target_outlet_index} off at {self.next_off}"
             )
             self.logger.info(f"created {self.off_task}")
-        self.logger.debug(f"{self.on_task}, {self.off_task}")
 
 
 class AlerterWorker:
@@ -287,40 +304,56 @@ async def run_controllers():
     # TODO: load controllers from Redis
     compressor = Actuator(
         actuator_name="compressor",
-        direction=OUT,  # compressor pumps heat (measured as temperature) out of system
+        direction=DECREASES,  # compressor pumps heat (measured as temperature) out of system
         default_state=L,  # default state is off
         work_units=("watts", "temperature"),
         flow_measurement=False,
         description="electric motor compressing a gas and pumping heat from a system",
         system_name="refridgerator",
     )
-    fridge_controller = BangBangWorker(
-        redis_connection=await init_redis(), actuator=compressor
+    humidifier = Actuator(
+        actuator_name="humidifier",
+        direction=INCREASES,  # humidifier increases local relative humidity inside the tent
+        default_state=L,
+        work_units=("watts", "humidity"),
+        flow_measurement=False,
+        description="humidifier using electric energy to vaporise water",
+        system_name="fruiting tent",
     )
-    controllers = [fridge_controller]
+    grow_tent_humidity_controller = BangBangWorker(
+        name="bang-bang controller",
+        actuator=humidifier,
+        target_sensor=1085,
+        target_units=ts_datastore.rh,
+        low=82,
+        high=88,
+        target_outlet=(etek_codes.masters[10], 5),
+    )
+    fridge_controller = BangBangWorker(
+        actuator=compressor, target_outlet=(etek_codes.masters[203], 3)
+    )
+    controllers = [fridge_controller, grow_tent_humidity_controller]
     controllers += [
         TimerWorker(
-            redis_connection=await init_redis(),
-            target_outlet_index=0,
+            target_outlet=(etek_codes.masters[203], 1),
             rrule_on="daily at 10a",
-            rrule_off="daily at 2:30am",
-        )
-    ]
-    controllers += [
+            rrule_off="daily at 2:15am",
+        ),
         TimerWorker(
-            redis_connection=await init_redis(),
-            target_outlet_index=3,
-            rrule_on="daily at 10a",
-            rrule_off="daily at 2:30am",
-        )
-    ]
-    controllers += [
+            target_outlet=(etek_codes.masters[203], 4),
+            rrule_on="daily at 10:15a",
+            rrule_off="daily at 2:15am",
+        ),
         TimerWorker(
-            redis_connection=await init_redis(),
-            target_outlet_index=4,
-            rrule_on="daily at 8a",
-            duration="12h",
-        )
+            target_outlet=(etek_codes.masters[203], 5),
+            rrule_on="daily at 9:30a",
+            duration="16h",
+        ),
+        TimerWorker(
+            target_outlet=(etek_codes.masters[10], 4),
+            rrule_on="daily at 9:45a",
+            duration="14h",
+        ),
     ]
     async for reading in pseudosub(redis_connection, "feedback_channel"):
         for controller in controllers:
