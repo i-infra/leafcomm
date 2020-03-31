@@ -139,7 +139,7 @@ class TimerWorker:
     ):
         rrulestr_parser = functools.partial(
             dateutil.rrule._rrulestr()._parse_rfc,
-            dtstart=arrow.now().floor("hour").datetime,
+            dtstart=arrow.now().shift(days=-1).floor("hour").datetime,
         )
         if isinstance(rrule_on, str) and "RRULE" not in rrule_on:
             rrule_str = recurrent.RecurringEvent().parse(rrule_on)
@@ -174,7 +174,8 @@ class TimerWorker:
         self.outlet_code = etek_codes.get_bitcode_from_master_and_index(
             self.outlet_master, self.target_outlet_index
         )
-        self.redis_connection_initer = asyncio.create_task(init_redis())
+        self.loop = asyncio.get_event_loop()
+        self.redis_connection_initer = self.loop.create_task(init_redis())
         self.redis_connection = None
 
         def redis_connection_finished_initing(fut):
@@ -183,6 +184,8 @@ class TimerWorker:
         self.redis_connection_initer.add_done_callback(
             redis_connection_finished_initing
         )
+        if not self.loop.is_running():
+            self.loop.run_until_complete(self.redis_connection_initer)
         self.key_name = f"{rrule_fragment}+{self.duration}s@{self.target_outlet_index}"
         self.logger = get_logger(self.key_name)
         self.logger.info(f"inited timer! {self.rrule_on} {self.rrule_off} {duration}")

@@ -189,7 +189,22 @@ def packed_bytes_to_iq(samples: bytes) -> numpy.ndarray:
 
 
 def get_new_center():
-    return min(433_800_000 + r1dx(10) * 20_000, 433940000)
+    return min(433_800_000 + r1dx(10) * 20_000, 433900000)
+
+
+class AsyncTimedIterable:
+    def __init__(self, iterable, timeout=1):
+        class AsyncTimedIterator:
+            def __init__(self):
+                self._iterator = iterable.__aiter__()
+
+            async def __anext__(self):
+                return await asyncio.wait_for(self._iterator.__anext__(), timeout)
+
+        self._factory = AsyncTimedIterator
+
+    def __aiter__(self):
+        return self._factory()
 
 
 async def rtlsdr_threshold_and_accumulate():
@@ -216,7 +231,9 @@ async def rtlsdr_threshold_and_accumulate():
     power_history_index = 0
     start_of_transmission_timestamp = 0
     one_stddev = 100
-    async for byte_samples in sdr.stream(bytes_per_block, format="bytes"):
+    async for byte_samples in AsyncTimedIterable(
+        sdr.stream(bytes_per_block, format="bytes"), timeout=1
+    ):
         accumulated = False
         if await connection.llen(EXIT_KEY):
             break
@@ -251,7 +268,7 @@ async def rtlsdr_threshold_and_accumulate():
                 )
         if accumulated:
             logger.info(
-                f"ACCUMULATED: {(ulid, block_index, power_history_index, running_average_block_power, block_powers[power_history_index], one_stddev,)}"
+                f"ACCUMULATED: {(ulid, block_index, power_history_index, running_average_block_power, block_powers[power_history_index], one_stddev,)} {center_frequency}"
             )
             block_index = 0
         power_history_index += 1
@@ -407,7 +424,7 @@ class DecodedCommand:
 def silver_sensor_decoder(packet: Packet) -> typing.Optional[DecodedSample]:
     """ hardware specific decoding function for the most common type of silver sensor """
     success = False
-    if len(packet.bits) in range(85, 230):
+    if len(packet.bits) in range(83, 230):
         packet.bits = [int(x[0] == 2) for x in rle(packet.bits) if x[1] == 0]
     if len(packet.bits) == 36:
         n = extract_fields_from_bits(
@@ -477,6 +494,7 @@ def pulses_to_sample(pulses: Pulses) -> DecodedSample:
 
 
 async def publish_decoded_sample(connection, sample):
+    """ assemble and publish frames containing T&H info, mark reading decoded """
     frames = [
         [sample.timestamp, sample.uid, ts_datastore.degc, float(sample.temperature)],
         [sample.timestamp, sample.uid, ts_datastore.rh, float(sample.humidity)],
@@ -547,7 +565,7 @@ def process_iq_reading(iq_reading):
                         sample for sample in pulses_to_sample(pulses) if sample != None
                     ]
                     logger.info(
-                        f"decoded {decoded} with {rf_filter_name}, {am_filter_name} from {iq_reading.ulid}"
+                        f"decoded {decoded} with {rf_filter_name}, {am_filter_name} from {iq_reading.ulid} @ {iq_reading.metadata}"
                     )
             if decoded != []:
                 break
@@ -661,7 +679,8 @@ async def sample_to_datastore() -> typing.Awaitable[None]:
     datastore = ts_datastore.TimeSeriesDatastore(db_name=data_dir + "sproutwave_v1.db")
     sys.stderr.write(datastore.db_name + "\n")
     async for reading in pseudosub(connection, "datastore_channel"):
-        datastore.add_measurement(*reading.value, raw=True)
+        if reading != None:
+            datastore.add_measurement(*reading.value, raw=True)
 
 
 async def sensor_monitor(connection=None, tick_time=60):
