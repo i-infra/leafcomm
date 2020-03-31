@@ -4,7 +4,6 @@ from node_comms import *
 FL2000_SAMPLE_RATE = 10_000_000
 FPS = 10
 SYMBOL_DURATION_SAMPLES = 750 // 3 * 10  # 750us per cluster of three bits
-UID = 0x0323
 
 _ZERO = [(SYMBOL_DURATION_SAMPLES * 1, 255), (SYMBOL_DURATION_SAMPLES * 2, 0)]
 
@@ -13,8 +12,8 @@ ON = 1
 OFF = 0
 
 
-def build_message_outlet_fl2000(outlet_code, state=OFF):
-    bit_sequence = [x for x in outlet_code]
+def build_message_from_bitcode_and_state(outlet_bitcode, state=OFF):
+    bit_sequence = [x for x in outlet_bitcode]
     if any([x not in (0, 1) for x in bit_sequence]):
         raise ValueError("outlet_code argument must be an iterable of 1s and 0s")
     state = int(bool(state))
@@ -25,12 +24,15 @@ def build_message_outlet_fl2000(outlet_code, state=OFF):
     else:
         raise ValueError("state argument must be bool-like, ie 1/0 or True/False")
     blob = bytes(rld(rerle(flatten([{0: _ZERO, 1: _ONE}[i] for i in bit_sequence]))))
-    blob += 12 * SYMBOL_DURATION_SAMPLES * b"\x00"
-    blob *= 6
+    blob += 8 * 3 * SYMBOL_DURATION_SAMPLES * b"\x00"
+    blob *= 5
     # last repeat has bottom bits all zero, regardless of mode
     bit_sequence[-5:] = [0] * 5
     blob += bytes(rld(rerle(flatten([{0: _ZERO, 1: _ONE}[i] for i in bit_sequence]))))
     return blob
+
+
+build_message_outlet_fl2000 = build_message_from_bitcode_and_state
 
 
 async def push_message_fl2000(bytes_, redis_connection=None):
