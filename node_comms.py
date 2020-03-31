@@ -116,20 +116,22 @@ def natural_sort(lst):
     return sorted(lst, key=natural_key)
 
 
-def multi_spawner(function_or_coroutine, cpu_index=0, forever=False):
-    " distributes work across separate processes running on optionally specified cpu cores.\n    work can be provided as either a function or a coroutine and if a coroutine will be opportunistically run with uvloop."
+def multi_spawner(function_or_coroutine, cpu_index=None, forever=False):
+    """ distributes work across separate processes running on optionally specified cpu cores.
+    work can be provided as either a function or a coroutine and if a coroutine will be opportunistically run with uvloop."""
 
     def callable_wrapper(target_function_or_coroutine, forever=False):
         func_name = str(target_function_or_coroutine).split()[1]
         file_name = os.path.basename(inspect.stack()[-1][1]).replace(".py", "")
         logger = get_logger(f"{func_name}")
-        try:
-            cpu_count = os.cpu_count()
-            cpu_map = [0] * cpu_count
-            cpu_map[cpu_index] = 1
-            os.sched_setaffinity(0, cpu_map)
-        except:
-            logging.debug("setaffinity failed")
+        if cpu_index != None:
+            try:
+                cpu_count = os.cpu_count()
+                cpu_map = [0] * cpu_count
+                cpu_map[cpu_index] = 1
+                os.sched_setaffinity(0, cpu_map)
+            except:
+                logging.debug("setaffinity failed")
         if isinstance(target_function_or_coroutine, functools.partial):
             actual_function = target_function_or_coroutine.func
         else:
@@ -353,8 +355,6 @@ daemonize yes""".encode()
         maybe_pid = int(open(pid_path).read().strip())
         if pid_exists(maybe_pid):
             already_running = True
-    if not already_running:
-        already_running = asyncio.run(check_redis(redis_socket_path))
     if already_running:
         get_logger().info(
             f"redis-server already running at {redis_socket_path} with PID {maybe_pid}!"
